@@ -1,0 +1,43 @@
+# KOL Distiller 配置文件（示例）
+# 复制为 config.yaml 后填入你的真实信息
+
+llm:
+  # 你的中转站API地址（OpenAI兼容格式）
+  base_url: "https://your-api-endpoint/v1"
+  # API Key
+  api_key: "sk-xxxxx"
+  # 模型名称（你中转站里的模型名）
+  model: "gpt-4o"
+  # 温度（分类用低温度，讨论用稍高）
+  temperature_classify: 0.1
+  temperature_distill: 0.3
+  temperature_discuss: 0.7
+
+twitter:
+  # Twitter/X 小号的cookie信息
+  # 获取方式：浏览器登录X → F12 → Application → Cookies → x.com
+  # 复制 auth_token 和 ct0 的值
+  auth_token: "你的auth_token"
+  ct0: "你的ct0"
+
+market_data:
+  # 行情数据来源
+  source: "binance"
+  # Binance公开API（欧洲VPS直连无需Key）
+  base_url: "https://api.binance.com"
+
+schedule:
+  # 抓取间隔（小时）
+  fetch_interval_hours: 6
+  # 每周几重新蒸馏（0=周一, 6=周日）
+  distill_day: 6
+  # 触发提前蒸馏的阈值（一周内交易观点推文数）
+  early_distill_threshold: 15
+
+distill:
+  # 蒸馏时回看多少天的推文
+  lookback_days: 30
+  # 首次添加KOL时拉取多少条历史推文
+  initial_fetch_count: 500
+  # 分类时每批处理多少条推文
+  batch_size: 10
