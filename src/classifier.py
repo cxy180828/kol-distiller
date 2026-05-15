@@ -167,12 +167,17 @@ def load_tagged_tweets(
         return []
 
     tweets = []
+    parse_errors = 0
     with open(tagged_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            tweet = json.loads(line)
+            try:
+                tweet = json.loads(line)
+            except json.JSONDecodeError:
+                parse_errors += 1
+                continue
 
             # 分类过滤
             if categories and tweet.get("category") not in categories:
@@ -206,6 +211,9 @@ def load_tagged_tweets(
                         pass  # 解析失败就不过滤，保留该推文
 
             tweets.append(tweet)
+
+    if parse_errors > 0:
+        print(f"  ⚠️ @{handle} 的标注文件中有 {parse_errors} 行数据损坏（已跳过）")
 
     return tweets
 

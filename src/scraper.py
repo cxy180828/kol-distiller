@@ -282,10 +282,17 @@ def load_raw_tweets(handle: str) -> list[dict]:
         return []
 
     tweets = []
+    parse_errors = 0
     with open(raw_path, "r", encoding="utf-8") as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             if line:
-                tweets.append(json.loads(line))
+                try:
+                    tweets.append(json.loads(line))
+                except json.JSONDecodeError:
+                    parse_errors += 1
+
+    if parse_errors > 0:
+        print(f"  ⚠️ @{handle} 的推文文件中有 {parse_errors} 行数据损坏（已跳过）")
 
     return tweets

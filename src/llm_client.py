@@ -68,17 +68,51 @@ class LLMClient:
                             wait_time = (attempt + 1) * 5
                             print(f"  ⚠️ API限流，等待{wait_time}秒后重试...")
                             await asyncio.sleep(wait_time)
-                            last_error = f"API限流 [{resp.status_code}]"
+                            last_error = f"API限流（状态码429），请稍后再试"
                             continue
-                        raise RuntimeError(
-                            f"LLM调用失败 [{resp.status_code}]: {error_text}"
-                        )
+                        elif resp.status_code == 401:
+                            raise RuntimeError(
+                                f"LLM API认证失败（状态码401）：API Key无效或已过期。\n"
+                                f"请到【设置】中检查 llm.api_key 是否正确。"
+                            )
+                        elif resp.status_code == 403:
+                            raise RuntimeError(
+                                f"LLM API权限不足（状态码403）：当前API Key无权访问该模型。\n"
+                                f"请确认模型名称 '{self.config.model}' 正确且有访问权限。"
+                            )
+                        elif resp.status_code >= 500:
+                            last_error = f"LLM服务端错误（状态码{resp.status_code}），服务可能暂时不可用"
+                            if attempt < max_retries - 1:
+                                import asyncio
+                                print(f"  ⚠️ LLM服务端错误，重试({attempt+1}/{max_retries})...")
+                                await asyncio.sleep(3)
+                                continue
+                        else:
+                            raise RuntimeError(
+                                f"LLM调用失败（状态码{resp.status_code}）: {error_text[:200]}"
+                            )
 
                     data = resp.json()
-                    return data["choices"][0]["message"]["content"]
+                    choices = data.get("choices")
+                    if not choices:
+                        raise RuntimeError(
+                            "LLM返回数据异常：响应中没有choices字段。\n"
+                            "请检查API地址和模型名称是否正确。"
+                        )
+                    return choices[0]["message"]["content"]
 
+            except httpx.ConnectError:
+                last_error = (
+                    f"无法连接到LLM服务（{self.base_url}）。\n"
+                    f"请检查：1) API地址是否正确 2) 网络是否通畅 3) 服务是否在线"
+                )
+                if attempt < max_retries - 1:
+                    import asyncio
+                    print(f"  ⚠️ 无法连接LLM服务，重试({attempt+1}/{max_retries})...")
+                    await asyncio.sleep(2)
+                    continue
             except httpx.TimeoutException:
-                last_error = "请求超时"
+                last_error = "LLM请求超时（120秒），可能是网络慢或模型响应时间过长"
                 if attempt < max_retries - 1:
                     import asyncio
                     print(f"  ⚠️ LLM请求超时，重试({attempt+1}/{max_retries})...")
@@ -125,11 +159,26 @@ class LLMClient:
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": "你的回复不是合法JSON，请只输出纯JSON，不要包含任何其他文字或markdown标记。"},
             ]
-            raw2 = await self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens)
+            try:
+                raw2 = await self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens)
+            except Exception as e:
+                raise RuntimeError(
+                    f"LLM返回的内容不是有效的JSON格式，重试也失败了。\n"
+                    f"原始回复前100字: {raw[:100]}...\n"
+                    f"重试错误: {e}"
+                )
+
             content2 = raw2.strip()
             if content2.startswith("```"):
                 lines = content2.split("\n")
                 lines = [l for l in lines if not l.strip().startswith("```")]
                 content2 = "\n".join(lines)
 
-            return json.loads(content2)
+            try:
+                return json.loads(content2)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"LLM两次返回的内容都不是有效JSON，可能是模型不支持结构化输出。\n"
+                    f"错误详情: {e}\n"
+                    f"第二次回复前100字: {content2[:100]}..."
+                )

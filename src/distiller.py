@@ -173,6 +173,10 @@ class ProfileDistiller:
 def save_profile(handle: str, profile_text: str):
     """保存Profile并备份旧版本"""
     handle = handle.lstrip("@")
+
+    if not profile_text or not profile_text.strip():
+        raise ValueError(f"@{handle} 的Profile内容为空，蒸馏可能失败了")
+
     kol_dir = get_kol_dir(handle)
     profile_path = kol_dir / "profile.md"
     history_dir = kol_dir / "history"
@@ -190,11 +194,22 @@ def save_profile(handle: str, profile_text: str):
                 if not backup_path.exists():
                     break
                 i += 1
-        shutil.copy2(profile_path, backup_path)
+        try:
+            shutil.copy2(profile_path, backup_path)
+        except Exception as e:
+            print(f"  ⚠️ 备份旧Profile失败（不影响新Profile保存）: {e}")
 
     # 写入新profile
-    with open(profile_path, "w", encoding="utf-8") as f:
-        f.write(profile_text)
+    try:
+        with open(profile_path, "w", encoding="utf-8") as f:
+            f.write(profile_text)
+    except PermissionError:
+        raise RuntimeError(
+            f"保存Profile失败：没有写入权限。\n"
+            f"文件路径: {profile_path}"
+        )
+    except OSError as e:
+        raise RuntimeError(f"保存Profile失败: {e}")
 
 
 def load_profile(handle: str) -> str:

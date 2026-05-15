@@ -66,6 +66,40 @@ class MarketDataClient:
             klines_4h = await self._get_klines(symbol, "4h", limit=30)
             klines_1d = await self._get_klines(symbol, "1d", limit=14)
             funding = await self._get_funding_rate(symbol)
+        except httpx.ConnectError:
+            return (
+                f"⚠️ 无法连接Binance API（{self.base_url}），请检查网络连接或API地址配置。\n"
+                f"请基于你的经验和记忆进行分析。"
+            )
+        except httpx.TimeoutException:
+            return (
+                f"⚠️ 获取{coin}行情数据超时，Binance API响应过慢。\n"
+                f"请基于你的经验和记忆进行分析。"
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 400:
+                return (
+                    f"⚠️ 交易对 {symbol} 不存在或已下架，请确认币种名称是否正确。\n"
+                    f"支持的币种示例: BTC, ETH, SOL, BNB, ARB, OP 等。\n"
+                    f"请基于你的经验和记忆进行分析。"
+                )
+            elif status == 418 or status == 403:
+                return (
+                    f"⚠️ Binance API访问被限制（状态码{status}），可能是IP被临时封禁。\n"
+                    f"建议稍后再试，或检查是否需要更换API地址。\n"
+                    f"请基于你的经验和记忆进行分析。"
+                )
+            elif status == 429:
+                return (
+                    f"⚠️ Binance API请求频率过高（限流），请稍后再试。\n"
+                    f"请基于你的经验和记忆进行分析。"
+                )
+            else:
+                return (
+                    f"⚠️ 获取{coin}行情数据失败（状态码{status}）。\n"
+                    f"请基于你的经验和记忆进行分析。"
+                )
         except Exception as e:
             return f"⚠️ 获取{coin}行情数据失败: {e}\n请基于你的经验和记忆进行分析。"
 
