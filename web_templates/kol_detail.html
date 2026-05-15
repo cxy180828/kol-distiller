@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}@{{ handle }} - KOL Distiller{% endblock %}
+{% block content %}
+<div style="display:flex; align-items:center; gap:16px; margin-bottom:20px;">
+    <a href="/" class="btn btn-outline btn-sm">← 返回</a>
+    <h1 style="font-size:22px;">@{{ handle }}</h1>
+    {% if has_profile %}
+    <span class="badge badge-success">已蒸馏</span>
+    {% else %}
+    <span class="badge badge-warning">未蒸馏</span>
+    {% endif %}
+</div>
+
+<!-- 统计 -->
+<div class="stat-grid">
+    <div class="stat-item">
+        <div class="value">{{ meta.get('total_tweets', 0) }}</div>
+        <div class="label">总推文</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ total_tagged }}</div>
+        <div class="label">已分类</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ trade_count_7d }}</div>
+        <div class="label">近7天交易观点</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ categories.get('trade_opinion', 0) }}</div>
+        <div class="label">交易观点总数</div>
+    </div>
+</div>
+
+<!-- 操作按钮 -->
+<div style="display:flex; gap:10px; margin-bottom:20px;">
+    <button class="btn btn-primary" onclick="updateKol()">🔄 更新（抓取+蒸馏）</button>
+    <button class="btn btn-outline" onclick="distillKol()">🧪 仅重新蒸馏</button>
+    <button class="btn btn-danger" onclick="deleteKol()">🗑️ 删除</button>
+</div>
+
+<!-- 分类统计 -->
+{% if categories %}
+<div class="card">
+    <div class="card-header"><h2>推文分类统计</h2></div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        {% for cat, count in categories.items() %}
+        <div style="padding:8px 14px; background:var(--bg-input); border-radius:var(--radius); font-size:13px;">
+            <span style="color:var(--text-dim);">{{ cat }}:</span> <strong>{{ count }}</strong>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Profile -->
+{% if profile %}
+<div class="card">
+    <div class="card-header"><h2>交易画像 Profile</h2></div>
+    <div class="markdown-body">{{ profile }}</div>
+</div>
+{% else %}
+<div class="card">
+    <p style="text-align:center; color:var(--text-dim); padding:30px;">
+        尚未生成Profile，请先执行蒸馏
+    </p>
+</div>
+{% endif %}
+
+<!-- 元数据 -->
+<div class="card">
+    <div class="card-header"><h2>元数据</h2></div>
+    <div style="font-size:13px; color:var(--text-dim);">
+        <p>最后抓取: {{ meta.get('last_fetch_time', '无') }}</p>
+        <p>最新推文ID: {{ meta.get('latest_tweet_id', '无') }}</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function updateKol() {
+    showToast('正在更新 @{{ handle }}...', 'running');
+    const resp = await apiPost('/api/kol/{{ handle }}/update', new FormData());
+    if (resp.task_id) pollTask(resp.task_id, () => location.reload());
+}
+
+async function distillKol() {
+    showToast('正在蒸馏 @{{ handle }}...', 'running');
+    const resp = await apiPost('/api/kol/{{ handle }}/distill', new FormData());
+    if (resp.task_id) pollTask(resp.task_id, () => location.reload());
+}
+
+async function deleteKol() {
+    if (!confirm('确定删除 @{{ handle }}？')) return;
+    await apiPost('/api/kol/{{ handle }}/delete', new FormData());
+    window.location.href = '/';
+}
+</script>
+{% endblock %}

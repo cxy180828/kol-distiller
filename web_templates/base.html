@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}KOL Distiller{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🧪 KOL Distiller</a>
+        <ul class="navbar-nav">
+            <li><a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>仪表盘</a></li>
+            <li><a href="/discuss" {% if request.url.path == "/discuss" %}class="active"{% endif %}>发起讨论</a></li>
+            <li><a href="/history" {% if request.url.path == "/history" %}class="active"{% endif %}>讨论历史</a></li>
+            <li><a href="/settings" {% if request.url.path == "/settings" %}class="active"{% endif %}>设置</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // Toast通知
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast notification-${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }
+
+        // 轮询任务状态
+        function pollTask(taskId, onComplete) {
+            const interval = setInterval(async () => {
+                const resp = await fetch(`/api/task/${taskId}`);
+                const task = await resp.json();
+                if (task.status === 'completed') {
+                    clearInterval(interval);
+                    showToast(task.result || task.description + ' 完成', 'success');
+                    if (onComplete) onComplete(task);
+                } else if (task.status === 'failed') {
+                    clearInterval(interval);
+                    showToast('失败: ' + task.error, 'error');
+                }
+            }, 3000);
+        }
+
+        // 通用POST请求
+        async function apiPost(url, formData = null) {
+            const resp = await fetch(url, {
+                method: 'POST',
+                body: formData,
+            });
+            return await resp.json();
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

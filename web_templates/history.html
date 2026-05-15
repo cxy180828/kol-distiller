@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}讨论历史 - KOL Distiller{% endblock %}
+{% block content %}
+<h1 style="font-size:22px; margin-bottom:20px;">📝 讨论历史</h1>
+
+<div class="card">
+    {% if discussions %}
+    {% for d in discussions %}
+    <div class="history-item">
+        <div>
+            <a href="/history/{{ d.filename }}" style="font-weight:600;">
+                {{ d.coin }} - {{ d.date }}
+            </a>
+            <div style="font-size:12px; color:var(--text-dim);">{{ d.filename }}</div>
+        </div>
+        <span class="badge badge-info">{{ (d.size / 1024)|round(1) }}KB</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p style="text-align:center; color:var(--text-dim); padding:40px;">
+        暂无讨论记录<br>去「发起讨论」页面创建第一次讨论
+    </p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 - KOL Distiller{% endblock %}
+{% block content %}
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+    <h1 style="font-size:22px;">仪表盘</h1>
+    <button class="btn btn-primary" onclick="showAddModal()">+ 添加 KOL</button>
+</div>
+
+<!-- 统计 -->
+<div class="stat-grid">
+    <div class="stat-item">
+        <div class="value">{{ kol_count }}</div>
+        <div class="label">已添加KOL</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ kols|selectattr('has_profile')|list|length }}</div>
+        <div class="label">已蒸馏</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ kols|sum(attribute='total_tweets') }}</div>
+        <div class="label">总推文数</div>
+    </div>
+    <div class="stat-item">
+        <div class="value">{{ kols|sum(attribute='trade_count_7d') }}</div>
+        <div class="label">近7天交易观点</div>
+    </div>
+</div>
+
+<!-- 通知 -->
+{% if notifications %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header"><h2>最近通知</h2></div>
+    {% for n in notifications %}
+    <div class="notification notification-{{ 'success' if n.status == 'completed' else 'error' }}">
+        <span>{{ n.description }}: {{ n.result or n.error }}</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">{{ n.completed_at[:16] if n.completed_at else '' }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- KOL 列表 -->
+<div class="card">
+    <div class="card-header"><h2>KOL 列表</h2></div>
+    {% if kols %}
+    <div class="grid" style="gap:10px;">
+        {% for kol in kols %}
+        <div class="kol-item">
+            <div class="kol-info">
+                <h3>
+                    <a href="/kol/{{ kol.handle }}">@{{ kol.handle }}</a>
+                    {% if kol.has_profile %}
+                    <span class="badge badge-success">已蒸馏</span>
+                    {% else %}
+                    <span class="badge badge-warning">未蒸馏</span>
+                    {% endif %}
+                </h3>
+                <div class="meta">
+                    {{ kol.total_tweets }}条推文 · 近7天{{ kol.trade_count_7d }}条交易观点 · 最后更新: {{ kol.last_fetch }}
+                </div>
+            </div>
+            <div class="kol-actions">
+                <button class="btn btn-outline btn-sm" onclick="updateKol('{{ kol.handle }}')">更新</button>
+                <button class="btn btn-outline btn-sm" onclick="distillKol('{{ kol.handle }}')">蒸馏</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteKol('{{ kol.handle }}')">删除</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--text-dim); text-align:center; padding:40px;">
+        还没有添加任何KOL<br>点击右上角「添加KOL」开始
+    </p>
+    {% endif %}
+</div>
+
+<!-- 添加KOL弹窗 -->
+<div id="addModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:300; display:none; align-items:center; justify-content:center;">
+    <div class="card" style="width:400px;">
+        <div class="card-header"><h2>添加 KOL</h2></div>
+        <form id="addForm" onsubmit="submitAdd(event)">
+            <div class="form-group">
+                <label>Twitter Handle</label>
+                <input type="text" name="handle" class="form-input" placeholder="@某KOL" required>
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="hideAddModal()">取消</button>
+                <button type="submit" class="btn btn-primary">开始添加</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showAddModal() {
+    document.getElementById('addModal').style.display = 'flex';
+}
+function hideAddModal() {
+    document.getElementById('addModal').style.display = 'none';
+}
+
+async function submitAdd(e) {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    hideAddModal();
+    showToast('正在后台添加 ' + form.get('handle') + '...', 'running');
+
+    const resp = await apiPost('/api/kol/add', form);
+    if (resp.task_id) {
+        pollTask(resp.task_id, () => location.reload());
+    } else {
+        showToast(resp.error || '添加失败', 'error');
+    }
+}
+
+async function updateKol(handle) {
+    showToast(`正在更新 @${handle}...`, 'running');
+    const form = new FormData();
+    const resp = await apiPost(`/api/kol/${handle}/update`, form);
+    if (resp.task_id) pollTask(resp.task_id, () => location.reload());
+}
+
+async function distillKol(handle) {
+    showToast(`正在蒸馏 @${handle}...`, 'running');
+    const form = new FormData();
+    const resp = await apiPost(`/api/kol/${handle}/distill`, form);
+    if (resp.task_id) pollTask(resp.task_id, () => location.reload());
+}
+
+async function deleteKol(handle) {
+    if (!confirm(`确定删除 @${handle}？所有数据将被清除。`)) return;
+    const form = new FormData();
+    const resp = await apiPost(`/api/kol/${handle}/delete`, form);
+    showToast(resp.message, 'success');
+    setTimeout(() => location.reload(), 1000);
+}
+</script>
+{% endblock %}

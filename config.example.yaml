@@ -41,3 +41,9 @@ distill:
   initial_fetch_count: 500
   # 分类时每批处理多少条推文
   batch_size: 10
+
+web:
+  # WebUI 登录密码
+  password: "your-password-here"
+  # 端口
+  port: 8080

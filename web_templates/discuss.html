@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}发起讨论 - KOL Distiller{% endblock %}
+{% block content %}
+<h1 style="font-size:22px; margin-bottom:20px;">💬 发起讨论</h1>
+
+<div class="card">
+    <form id="discussForm" onsubmit="submitDiscuss(event)">
+        <!-- 币种 -->
+        <div class="form-group">
+            <label>选择币种</label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                {% for coin in ['BTC', 'ETH', 'SOL', 'BNB', 'DOGE', 'XRP'] %}
+                <label class="kol-checkbox">
+                    <input type="radio" name="coin" value="{{ coin }}" {% if coin == 'BTC' %}checked{% endif %}>
+                    {{ coin }}
+                </label>
+                {% endfor %}
+                <input type="text" class="form-input" style="width:120px;" placeholder="其他..." id="customCoin">
+            </div>
+        </div>
+
+        <!-- 选择KOL -->
+        <div class="form-group">
+            <label>参与讨论的KOL（不选则全部参与）</label>
+            {% if available_kols %}
+            <div class="kol-checkbox-grid">
+                {% for kol in available_kols %}
+                <label class="kol-checkbox">
+                    <input type="checkbox" name="kol" value="{{ kol }}">
+                    @{{ kol }}
+                </label>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-dim);">没有已蒸馏的KOL，请先添加并蒸馏</p>
+            {% endif %}
+        </div>
+
+        <button type="submit" class="btn btn-primary" {% if not available_kols %}disabled{% endif %}>
+            🚀 开始讨论
+        </button>
+    </form>
+</div>
+
+<!-- 结果区域 -->
+<div id="resultArea" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <h2>讨论结果</h2>
+            <span class="badge badge-info" id="resultStatus">等待中...</span>
+        </div>
+        <div id="resultContent" class="markdown-body" style="max-height:none;">
+            <div class="spinner"></div> 正在分析，请稍候...
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function submitDiscuss(e) {
+    e.preventDefault();
+
+    // 获取币种
+    let coin = document.querySelector('input[name="coin"]:checked')?.value;
+    const custom = document.getElementById('customCoin').value.trim();
+    if (custom) coin = custom;
+    if (!coin) { showToast('请选择币种', 'error'); return; }
+
+    // 获取选中的KOL
+    const checked = document.querySelectorAll('input[name="kol"]:checked');
+    const kols = Array.from(checked).map(cb => cb.value).join(',');
+
+    // 显示结果区域
+    const resultArea = document.getElementById('resultArea');
+    const resultContent = document.getElementById('resultContent');
+    const resultStatus = document.getElementById('resultStatus');
+    resultArea.style.display = 'block';
+    resultContent.innerHTML = '<div class="spinner"></div> 正在分析，请稍候（通常需要1-2分钟）...';
+    resultStatus.textContent = '分析中...';
+    resultStatus.className = 'badge badge-warning';
+
+    // 提交
+    const form = new FormData();
+    form.append('coin', coin);
+    form.append('kols', kols);
+
+    const resp = await apiPost('/api/discuss', form);
+    if (resp.task_id) {
+        // 轮询结果
+        const interval = setInterval(async () => {
+            const taskResp = await fetch(`/api/task/${resp.task_id}`);
+            const task = await taskResp.json();
+
+            if (task.status === 'completed') {
+                clearInterval(interval);
+                resultContent.textContent = task.result;
+                resultStatus.textContent = '完成';
+                resultStatus.className = 'badge badge-success';
+            } else if (task.status === 'failed') {
+                clearInterval(interval);
+                resultContent.textContent = '分析失败: ' + task.error;
+                resultStatus.textContent = '失败';
+                resultStatus.className = 'badge badge-danger';
+            } else if (task.progress) {
+                resultContent.innerHTML = '<div class="spinner"></div> ' + task.progress;
+            }
+        }, 3000);
+    }
+}
+</script>
+{% endblock %}

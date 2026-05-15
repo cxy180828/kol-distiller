@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}设置 - KOL Distiller{% endblock %}
+{% block content %}
+<h1 style="font-size:22px; margin-bottom:20px;">⚙️ 设置</h1>
+
+<div class="card">
+    <div class="card-header"><h2>配置文件 (config.yaml)</h2></div>
+    <form id="settingsForm" onsubmit="saveSettings(event)">
+        <div class="form-group">
+            <textarea name="config_text" class="form-textarea" style="min-height:400px;">{{ config_text }}</textarea>
+        </div>
+        <div style="display:flex; gap:10px;">
+            <button type="submit" class="btn btn-primary">💾 保存配置</button>
+            <span style="font-size:12px; color:var(--text-dim); align-self:center;">
+                保存后自动生效（无需重启，下次操作时加载新配置）
+            </span>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>配置说明</h2></div>
+    <div style="font-size:13px; color:var(--text-dim); line-height:2;">
+        <p><strong>llm.base_url</strong> — 你的中转站API地址（OpenAI兼容格式）</p>
+        <p><strong>llm.api_key</strong> — API Key</p>
+        <p><strong>llm.model</strong> — 模型名称</p>
+        <p><strong>twitter.auth_token</strong> — X小号Cookie中的auth_token</p>
+        <p><strong>twitter.ct0</strong> — X小号Cookie中的ct0</p>
+        <p><strong>web.password</strong> — WebUI登录密码</p>
+        <p><strong>schedule.fetch_interval_hours</strong> — 定时抓取间隔（小时）</p>
+        <p><strong>schedule.distill_day</strong> — 每周蒸馏日（0=周一, 6=周日）</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function saveSettings(e) {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    const resp = await apiPost('/api/settings/save', form);
+    if (resp.error) {
+        showToast('保存失败: ' + resp.error, 'error');
+    } else {
+        showToast('配置已保存', 'success');
+    }
+}
+</script>
+{% endblock %}

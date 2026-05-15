@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ filename }} - KOL Distiller{% endblock %}
+{% block content %}
+<div style="display:flex; align-items:center; gap:16px; margin-bottom:20px;">
+    <a href="/history" class="btn btn-outline btn-sm">← 返回</a>
+    <h1 style="font-size:18px;">{{ filename }}</h1>
+</div>
+
+<div class="card">
+    <div class="markdown-body" style="max-height:none;">{{ content }}</div>
+</div>
+{% endblock %}
