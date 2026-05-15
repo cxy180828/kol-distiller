@@ -653,6 +653,15 @@ async def api_twitter_login(request: Request):
                 _twitter_login_state["client"] = client
                 _twitter_login_state["status"] = "need_2fa"
                 return JSONResponse({"status": "need_2fa", "message": "请输入2FA验证码"})
+            elif "key_byte" in error_msg:
+                return JSONResponse({
+                    "error": (
+                        "Twitter登录验证失败（KEY_BYTE错误）。\n"
+                        "Twitter更新了前端加密，用户名密码登录暂时不可用。\n"
+                        "请先在VPS执行: pip install --upgrade twikit\n"
+                        "如仍报错，请用浏览器Cookie方式：在config.yaml中填写auth_token和ct0"
+                    )
+                }, status_code=400)
             else:
                 return JSONResponse({"error": f"登录失败: {e}"}, status_code=400)
     except Exception as e:
