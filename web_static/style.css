@@ -382,3 +382,27 @@ a:hover { color: var(--accent-hover); }
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
 }
+
+
+/* Settings page */
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.secret-input {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.secret-input .form-input {
+    flex: 1;
+}
+
+.form-group .hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 400;
+}

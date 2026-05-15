@@ -3,38 +3,169 @@
 {% block content %}
 <h1 style="font-size:22px; margin-bottom:20px;">⚙️ 设置</h1>
 
-<div class="card">
-    <div class="card-header"><h2>配置文件 (config.yaml)</h2></div>
-    <form id="settingsForm" onsubmit="saveSettings(event)">
-        <div class="form-group">
-            <textarea name="config_text" class="form-textarea" style="min-height:400px;">{{ config_text }}</textarea>
-        </div>
-        <div style="display:flex; gap:10px;">
-            <button type="submit" class="btn btn-primary">💾 保存配置</button>
-            <span style="font-size:12px; color:var(--text-dim); align-self:center;">
-                保存后自动生效（无需重启，下次操作时加载新配置）
-            </span>
-        </div>
-    </form>
-</div>
+<form id="settingsForm" onsubmit="saveSettings(event)">
 
+<!-- LLM 配置 -->
 <div class="card">
-    <div class="card-header"><h2>配置说明</h2></div>
-    <div style="font-size:13px; color:var(--text-dim); line-height:2;">
-        <p><strong>llm.base_url</strong> — 你的中转站API地址（OpenAI兼容格式）</p>
-        <p><strong>llm.api_key</strong> — API Key</p>
-        <p><strong>llm.model</strong> — 模型名称</p>
-        <p><strong>twitter.auth_token</strong> — X小号Cookie中的auth_token</p>
-        <p><strong>twitter.ct0</strong> — X小号Cookie中的ct0</p>
-        <p><strong>web.password</strong> — WebUI登录密码</p>
-        <p><strong>schedule.fetch_interval_hours</strong> — 定时抓取间隔（小时）</p>
-        <p><strong>schedule.distill_day</strong> — 每周蒸馏日（0=周一, 6=周日）</p>
+    <div class="card-header"><h2>🤖 大模型 (LLM)</h2></div>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>API 地址 <span class="hint">OpenAI兼容格式</span></label>
+            <input type="text" name="llm_base_url" class="form-input" placeholder="https://your-api-endpoint/v1" value="{{ config.llm_base_url }}">
+        </div>
+        <div class="form-group">
+            <label>API Key <span class="badge badge-warning">敏感</span></label>
+            <div class="secret-input">
+                <input type="password" name="llm_api_key" class="form-input" placeholder="sk-xxxxx" value="{{ config.llm_api_key }}">
+                <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>模型名称</label>
+            <input type="text" name="llm_model" class="form-input" placeholder="gpt-4o" value="{{ config.llm_model }}">
+        </div>
+        <div class="form-group">
+            <label>分类温度 <span class="hint">推荐 0.1</span></label>
+            <input type="number" name="llm_temperature_classify" class="form-input" step="0.1" min="0" max="2" value="{{ config.llm_temperature_classify }}">
+        </div>
+        <div class="form-group">
+            <label>蒸馏温度 <span class="hint">推荐 0.3</span></label>
+            <input type="number" name="llm_temperature_distill" class="form-input" step="0.1" min="0" max="2" value="{{ config.llm_temperature_distill }}">
+        </div>
+        <div class="form-group">
+            <label>讨论温度 <span class="hint">推荐 0.7</span></label>
+            <input type="number" name="llm_temperature_discuss" class="form-input" step="0.1" min="0" max="2" value="{{ config.llm_temperature_discuss }}">
+        </div>
     </div>
 </div>
+
+<!-- Twitter 配置 -->
+<div class="card">
+    <div class="card-header"><h2>🐦 Twitter / X</h2></div>
+    <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">
+        获取方式：浏览器登录X → F12 → Application → Cookies → x.com → 复制 auth_token 和 ct0
+    </p>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>auth_token <span class="badge badge-warning">敏感</span></label>
+            <div class="secret-input">
+                <input type="password" name="twitter_auth_token" class="form-input" placeholder="你的auth_token" value="{{ config.twitter_auth_token }}">
+                <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>ct0 <span class="badge badge-warning">敏感</span></label>
+            <div class="secret-input">
+                <input type="password" name="twitter_ct0" class="form-input" placeholder="你的ct0" value="{{ config.twitter_ct0 }}">
+                <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 行情数据 -->
+<div class="card">
+    <div class="card-header"><h2>📈 行情数据</h2></div>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>数据源</label>
+            <input type="text" name="market_data_source" class="form-input" value="{{ config.market_data_source }}" readonly>
+        </div>
+        <div class="form-group">
+            <label>API 地址</label>
+            <input type="text" name="market_data_base_url" class="form-input" placeholder="https://api.binance.com" value="{{ config.market_data_base_url }}">
+        </div>
+    </div>
+</div>
+
+<!-- 定时任务 -->
+<div class="card">
+    <div class="card-header"><h2>⏰ 定时任务</h2></div>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>抓取间隔（小时）</label>
+            <input type="number" name="schedule_fetch_interval_hours" class="form-input" min="1" max="24" value="{{ config.schedule_fetch_interval_hours }}">
+        </div>
+        <div class="form-group">
+            <label>每周蒸馏日</label>
+            <select name="schedule_distill_day" class="form-input">
+                <option value="0" {{ 'selected' if config.schedule_distill_day == 0 }}>周一</option>
+                <option value="1" {{ 'selected' if config.schedule_distill_day == 1 }}>周二</option>
+                <option value="2" {{ 'selected' if config.schedule_distill_day == 2 }}>周三</option>
+                <option value="3" {{ 'selected' if config.schedule_distill_day == 3 }}>周四</option>
+                <option value="4" {{ 'selected' if config.schedule_distill_day == 4 }}>周五</option>
+                <option value="5" {{ 'selected' if config.schedule_distill_day == 5 }}>周六</option>
+                <option value="6" {{ 'selected' if config.schedule_distill_day == 6 }}>周日</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>提前蒸馏阈值 <span class="hint">一周内交易推文数达到此值触发</span></label>
+            <input type="number" name="schedule_early_distill_threshold" class="form-input" min="5" max="100" value="{{ config.schedule_early_distill_threshold }}">
+        </div>
+    </div>
+</div>
+
+<!-- 蒸馏参数 -->
+<div class="card">
+    <div class="card-header"><h2>🧪 蒸馏参数</h2></div>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>回看天数 <span class="hint">蒸馏时使用最近N天的推文</span></label>
+            <input type="number" name="distill_lookback_days" class="form-input" min="7" max="90" value="{{ config.distill_lookback_days }}">
+        </div>
+        <div class="form-group">
+            <label>首次拉取数量 <span class="hint">添加KOL时拉取多少条历史推文</span></label>
+            <input type="number" name="distill_initial_fetch_count" class="form-input" min="50" max="2000" value="{{ config.distill_initial_fetch_count }}">
+        </div>
+        <div class="form-group">
+            <label>分类批次大小 <span class="hint">每次LLM调用处理多少条</span></label>
+            <input type="number" name="distill_batch_size" class="form-input" min="5" max="20" value="{{ config.distill_batch_size }}">
+        </div>
+    </div>
+</div>
+
+<!-- Web 配置 -->
+<div class="card">
+    <div class="card-header"><h2>🔐 Web UI</h2></div>
+    <div class="settings-grid">
+        <div class="form-group">
+            <label>登录密码 <span class="badge badge-warning">敏感</span></label>
+            <div class="secret-input">
+                <input type="password" name="web_password" class="form-input" placeholder="登录密码" value="{{ config.web_password }}">
+                <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>端口</label>
+            <input type="number" name="web_port" class="form-input" min="1024" max="65535" value="{{ config.web_port }}">
+        </div>
+    </div>
+</div>
+
+<!-- 保存按钮 -->
+<div style="display:flex; gap:10px; align-items:center; padding:16px 0;">
+    <button type="submit" class="btn btn-primary">💾 保存所有配置</button>
+    <span style="font-size:12px; color:var(--text-dim);">
+        保存后自动生效（无需重启，下次操作时加载新配置）
+    </span>
+</div>
+
+</form>
 {% endblock %}
 
 {% block scripts %}
 <script>
+function toggleSecret(btn) {
+    const input = btn.parentElement.querySelector('input');
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '隐藏';
+    } else {
+        input.type = 'password';
+        btn.textContent = '显示';
+    }
+}
+
 async function saveSettings(e) {
     e.preventDefault();
     const form = new FormData(e.target);

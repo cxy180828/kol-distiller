@@ -309,12 +309,42 @@ async def settings_page(request: Request):
 
     import yaml
     config_path = ROOT_DIR / "config.yaml"
-    config_text = ""
+    config_data = {}
     if config_path.exists():
-        config_text = config_path.read_text(encoding="utf-8")
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+
+        # 扁平化配置供模板使用
+        llm = raw.get("llm", {})
+        twitter = raw.get("twitter", {})
+        market = raw.get("market_data", {})
+        schedule = raw.get("schedule", {})
+        distill = raw.get("distill", {})
+        web = raw.get("web", {})
+
+        config_data = {
+            "llm_base_url": llm.get("base_url", ""),
+            "llm_api_key": llm.get("api_key", ""),
+            "llm_model": llm.get("model", ""),
+            "llm_temperature_classify": llm.get("temperature_classify", 0.1),
+            "llm_temperature_distill": llm.get("temperature_distill", 0.3),
+            "llm_temperature_discuss": llm.get("temperature_discuss", 0.7),
+            "twitter_auth_token": twitter.get("auth_token", ""),
+            "twitter_ct0": twitter.get("ct0", ""),
+            "market_data_source": market.get("source", "binance"),
+            "market_data_base_url": market.get("base_url", "https://api.binance.com"),
+            "schedule_fetch_interval_hours": schedule.get("fetch_interval_hours", 6),
+            "schedule_distill_day": schedule.get("distill_day", 6),
+            "schedule_early_distill_threshold": schedule.get("early_distill_threshold", 15),
+            "distill_lookback_days": distill.get("lookback_days", 30),
+            "distill_initial_fetch_count": distill.get("initial_fetch_count", 500),
+            "distill_batch_size": distill.get("batch_size", 10),
+            "web_password": web.get("password", ""),
+            "web_port": web.get("port", 8088),
+        }
 
     return render(request, "settings.html", {
-        "config_text": config_text,
+        "config": config_data,
     })
 
 
@@ -485,25 +515,59 @@ async def api_notifications(request: Request):
 
 
 @app.post("/api/settings/save")
-async def api_save_settings(request: Request, config_text: str = Form(...)):
+async def api_save_settings(request: Request):
     if not check_auth(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
 
     import yaml
-    # 验证YAML格式
-    try:
-        yaml.safe_load(config_text)
-    except yaml.YAMLError as e:
-        return JSONResponse({"error": f"YAML格式错误: {e}"}, status_code=400)
+
+    form = await request.form()
+
+    # 从表单字段构建配置结构
+    config_data = {
+        "llm": {
+            "base_url": form.get("llm_base_url", ""),
+            "api_key": form.get("llm_api_key", ""),
+            "model": form.get("llm_model", ""),
+            "temperature_classify": float(form.get("llm_temperature_classify", 0.1)),
+            "temperature_distill": float(form.get("llm_temperature_distill", 0.3)),
+            "temperature_discuss": float(form.get("llm_temperature_discuss", 0.7)),
+        },
+        "twitter": {
+            "auth_token": form.get("twitter_auth_token", ""),
+            "ct0": form.get("twitter_ct0", ""),
+        },
+        "market_data": {
+            "source": form.get("market_data_source", "binance"),
+            "base_url": form.get("market_data_base_url", "https://api.binance.com"),
+        },
+        "schedule": {
+            "fetch_interval_hours": int(form.get("schedule_fetch_interval_hours", 6)),
+            "distill_day": int(form.get("schedule_distill_day", 6)),
+            "early_distill_threshold": int(form.get("schedule_early_distill_threshold", 15)),
+        },
+        "distill": {
+            "lookback_days": int(form.get("distill_lookback_days", 30)),
+            "initial_fetch_count": int(form.get("distill_initial_fetch_count", 500)),
+            "batch_size": int(form.get("distill_batch_size", 10)),
+        },
+        "web": {
+            "password": form.get("web_password", "admin"),
+            "port": int(form.get("web_port", 8088)),
+        },
+    }
 
     config_path = ROOT_DIR / "config.yaml"
-    # 备份
+    # 备份旧配置
     backup_path = ROOT_DIR / "config.yaml.bak"
     if config_path.exists():
         import shutil
         shutil.copy2(config_path, backup_path)
 
-    config_path.write_text(config_text, encoding="utf-8")
+    # 写入新配置
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
     return JSONResponse({"message": "配置已保存"})
 
 
