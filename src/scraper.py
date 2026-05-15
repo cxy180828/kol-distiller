@@ -64,6 +64,16 @@ class TweetScraper:
                         "此账号开启了2FA验证，无法通过命令行自动登录。\n"
                         "请到Web端【设置】页面手动登录（支持输入2FA验证码）。"
                     )
+                if "key_byte" in error_msg:
+                    raise RuntimeError(
+                        "Twitter登录验证失败（KEY_BYTE错误）。\n"
+                        "Twitter更新了前端加密方式，用户名密码登录暂时不可用。\n"
+                        "解决方案：\n"
+                        "  1. 先尝试: pip install --upgrade twikit\n"
+                        "  2. 如仍报错，请用浏览器Cookie方式：\n"
+                        "     在浏览器登录x.com → F12 → Application → Cookies\n"
+                        "     复制 auth_token 和 ct0 填到 config.yaml 的 twitter 段"
+                    )
                 raise RuntimeError(f"Twitter登录失败: {e}")
 
         # 兜底：使用auth_token和ct0（不稳定）
@@ -153,13 +163,25 @@ class TweetScraper:
 
             # 检测Cookie过期/登录失效的常见错误
             cookie_expired_keywords = [
-                "KEY_BYTE", "unauthorized", "401", "403",
+                "unauthorized", "401", "403",
                 "Could not authenticate", "InvalidToken",
                 "BadRequest", "session", "expired",
             ]
             is_cookie_error = any(kw.lower() in error_msg.lower() for kw in cookie_expired_keywords)
 
-            if is_cookie_error:
+            if "key_byte" in error_msg.lower():
+                raise RuntimeError(
+                    f"Twitter登录验证失败（KEY_BYTE错误）。\n"
+                    f"这是因为Twitter更新了前端加密方式，用户名密码登录暂时不可用。\n"
+                    f"解决方案：\n"
+                    f"  1. 在你的VPS上执行: pip install --upgrade twikit\n"
+                    f"  2. 如果升级后仍报错，请使用浏览器Cookie方式登录：\n"
+                    f"     - 用浏览器登录 x.com\n"
+                    f"     - 按F12 → Application → Cookies → x.com\n"
+                    f"     - 复制 auth_token 和 ct0 的值\n"
+                    f"     - 填到 config.yaml 的 twitter.auth_token 和 twitter.ct0"
+                )
+            elif is_cookie_error:
                 raise RuntimeError(
                     f"Twitter登录已过期或无效，请到【设置】页面重新登录Twitter。\n"
                     f"（原始错误: {error_msg}）"
