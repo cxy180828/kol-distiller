@@ -190,17 +190,24 @@ async def login_submit(request: Request, password: str = Form(...)):
         config_path = ROOT_DIR / "config.yaml"
         if config_path.exists():
             import yaml
-            with open(config_path, "r", encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-            correct_password = raw.get("web", {}).get("password", "admin")
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    raw = yaml.safe_load(f) or {}
+                correct_password = raw.get("web", {}).get("password", "admin")
+            except Exception:
+                # 配置文件读取失败时使用默认密码
+                pass
+
+        if not password.strip():
+            return RedirectResponse("/login?error=请输入密码", status_code=302)
 
         if password == correct_password:
             request.session["authenticated"] = True
             return RedirectResponse("/", status_code=302)
         else:
-            return RedirectResponse("/login?error=密码错误", status_code=302)
+            return RedirectResponse("/login?error=密码错误，请重试", status_code=302)
     except Exception as e:
-        return RedirectResponse(f"/login?error={e}", status_code=302)
+        return RedirectResponse(f"/login?error=登录异常，请稍后重试", status_code=302)
 
 
 @app.get("/logout")
@@ -246,19 +253,28 @@ async def kol_detail(request: Request, handle: str):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
-    handle = handle.lstrip("@")
+    handle = handle.lstrip("@").strip()
+    if not handle:
+        raise HTTPException(400, "KOL handle不能为空")
+
     kol_dir = get_kol_dir(handle)
     meta_path = kol_dir / "meta.json"
 
     if not meta_path.exists():
-        raise HTTPException(404, f"@{handle} 不存在")
+        raise HTTPException(404, f"@{handle} 不存在，请先通过「添加KOL」功能添加")
 
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except json.JSONDecodeError:
+        raise HTTPException(500, f"@{handle} 的元数据文件损坏，请尝试重新添加该KOL")
 
     profile_text = ""
     if has_profile(handle):
-        profile_text = load_profile(handle)
+        try:
+            profile_text = load_profile(handle)
+        except Exception:
+            profile_text = "（Profile文件读取失败）"
 
     # 分类统计
     tagged = load_tagged_tweets(handle)
@@ -317,11 +333,18 @@ async def history_detail(request: Request, filename: str):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
+    # 防止目录遍历攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "文件名无效")
+
     filepath = DISCUSSIONS_DIR / filename
     if not filepath.exists():
-        raise HTTPException(404, "讨论记录不存在")
+        raise HTTPException(404, "讨论记录不存在，可能已被删除")
 
-    content = filepath.read_text(encoding="utf-8")
+    try:
+        content = filepath.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"读取讨论记录失败: {e}")
 
     return render(request, "history_detail.html", {
         "filename": filename,
@@ -337,17 +360,26 @@ async def settings_page(request: Request):
     import yaml
     config_path = ROOT_DIR / "config.yaml"
     config_data = {}
+    config_error = None
+
     if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            raw = {}
+            config_error = f"配置文件格式错误，请检查YAML语法: {e}"
+        except Exception as e:
+            raw = {}
+            config_error = f"读取配置文件失败: {e}"
 
         # 扁平化配置供模板使用
-        llm = raw.get("llm", {})
-        twitter = raw.get("twitter", {})
-        market = raw.get("market_data", {})
-        schedule = raw.get("schedule", {})
-        distill = raw.get("distill", {})
-        web = raw.get("web", {})
+        llm = raw.get("llm", {}) if isinstance(raw, dict) else {}
+        twitter = raw.get("twitter", {}) if isinstance(raw, dict) else {}
+        market = raw.get("market_data", {}) if isinstance(raw, dict) else {}
+        schedule = raw.get("schedule", {}) if isinstance(raw, dict) else {}
+        distill = raw.get("distill", {}) if isinstance(raw, dict) else {}
+        web = raw.get("web", {}) if isinstance(raw, dict) else {}
 
         config_data = {
             "llm_base_url": llm.get("base_url", ""),
@@ -373,6 +405,7 @@ async def settings_page(request: Request):
 
     return render(request, "settings.html", {
         "config": config_data,
+        "config_error": config_error,
     })
 
 
@@ -386,6 +419,12 @@ async def api_add_kol(request: Request, handle: str = Form(...)):
     handle = handle.lstrip("@").strip()
     if not handle:
         return JSONResponse({"error": "handle不能为空"}, status_code=400)
+
+    # 基本格式校验
+    if len(handle) > 50:
+        return JSONResponse({"error": "handle过长，请输入正确的Twitter用户名"}, status_code=400)
+    if " " in handle:
+        return JSONResponse({"error": "handle不能包含空格"}, status_code=400)
 
     # 检查是否已存在
     existing_kols = list_kols()
@@ -497,10 +536,22 @@ async def api_delete_kol(request: Request, handle: str):
         return JSONResponse({"error": "未登录"}, status_code=401)
 
     import shutil
-    handle = handle.lstrip("@")
+    handle = handle.lstrip("@").strip()
+
+    if not handle:
+        return JSONResponse({"error": "handle不能为空"}, status_code=400)
+
     kol_dir = get_kol_dir(handle)
-    if kol_dir.exists():
+    if not kol_dir.exists() or not (kol_dir / "meta.json").exists():
+        return JSONResponse({"error": f"@{handle} 不存在，无法删除"}, status_code=404)
+
+    try:
         shutil.rmtree(kol_dir)
+    except PermissionError:
+        return JSONResponse({"error": f"删除 @{handle} 失败：权限不足，请检查文件权限"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": f"删除 @{handle} 失败: {e}"}, status_code=500)
+
     return JSONResponse({"message": f"@{handle} 已删除"})
 
 
@@ -510,7 +561,19 @@ async def api_discuss(request: Request, coin: str = Form(...), kols: str = Form(
         return JSONResponse({"error": "未登录"}, status_code=401)
 
     coin = coin.upper().strip()
+    if not coin:
+        return JSONResponse({"error": "请输入要讨论的币种（如BTC、ETH）"}, status_code=400)
+
+    if len(coin) > 20:
+        return JSONResponse({"error": "币种名称过长，请输入正确的币种代码"}, status_code=400)
+
     selected_kols = [k.strip() for k in kols.split(",") if k.strip()] or None
+
+    # 检查是否有可用的KOL
+    all_kols = list_kols()
+    available_kols = [h for h in all_kols if has_profile(h)]
+    if not available_kols:
+        return JSONResponse({"error": "没有已蒸馏的KOL可以参与讨论，请先添加并蒸馏至少一个KOL"}, status_code=400)
 
     task_id = task_manager.create_task("discuss", f"讨论 {coin}")
 
@@ -658,40 +721,74 @@ async def api_save_settings(request: Request):
 
     form = await request.form()
 
-    # 从表单字段构建配置结构
-    config_data = {
-        "llm": {
-            "base_url": form.get("llm_base_url", ""),
-            "api_key": form.get("llm_api_key", ""),
-            "model": form.get("llm_model", ""),
-            "temperature_classify": float(form.get("llm_temperature_classify", 0.1)),
-            "temperature_distill": float(form.get("llm_temperature_distill", 0.3)),
-            "temperature_discuss": float(form.get("llm_temperature_discuss", 0.7)),
-        },
-        "twitter": {
-            "username": form.get("twitter_username", ""),
-            "password": form.get("twitter_password", ""),
-            "email": form.get("twitter_email", ""),
-        },
-        "market_data": {
-            "source": form.get("market_data_source", "binance"),
-            "base_url": form.get("market_data_base_url", "https://api.binance.com"),
-        },
-        "schedule": {
-            "fetch_interval_hours": int(form.get("schedule_fetch_interval_hours", 6)),
-            "distill_day": int(form.get("schedule_distill_day", 6)),
-            "early_distill_threshold": int(form.get("schedule_early_distill_threshold", 15)),
-        },
-        "distill": {
-            "lookback_days": int(form.get("distill_lookback_days", 30)),
-            "initial_fetch_count": int(form.get("distill_initial_fetch_count", 500)),
-            "batch_size": int(form.get("distill_batch_size", 10)),
-        },
-        "web": {
-            "password": form.get("web_password", "admin"),
-            "port": int(form.get("web_port", 8088)),
-        },
-    }
+    # 安全转换数值类型的辅助函数
+    def safe_float(value, default, field_name):
+        try:
+            return float(value) if value else default
+        except (ValueError, TypeError):
+            raise ValueError(f"字段 {field_name} 必须是数字，当前值 '{value}' 无效")
+
+    def safe_int(value, default, field_name):
+        try:
+            return int(value) if value else default
+        except (ValueError, TypeError):
+            raise ValueError(f"字段 {field_name} 必须是整数，当前值 '{value}' 无效")
+
+    try:
+        # 从表单字段构建配置结构
+        config_data = {
+            "llm": {
+                "base_url": form.get("llm_base_url", ""),
+                "api_key": form.get("llm_api_key", ""),
+                "model": form.get("llm_model", ""),
+                "temperature_classify": safe_float(form.get("llm_temperature_classify"), 0.1, "分类温度"),
+                "temperature_distill": safe_float(form.get("llm_temperature_distill"), 0.3, "蒸馏温度"),
+                "temperature_discuss": safe_float(form.get("llm_temperature_discuss"), 0.7, "讨论温度"),
+            },
+            "twitter": {
+                "username": form.get("twitter_username", ""),
+                "password": form.get("twitter_password", ""),
+                "email": form.get("twitter_email", ""),
+            },
+            "market_data": {
+                "source": form.get("market_data_source", "binance"),
+                "base_url": form.get("market_data_base_url", "https://api.binance.com"),
+            },
+            "schedule": {
+                "fetch_interval_hours": safe_int(form.get("schedule_fetch_interval_hours"), 6, "抓取间隔"),
+                "distill_day": safe_int(form.get("schedule_distill_day"), 6, "蒸馏日"),
+                "early_distill_threshold": safe_int(form.get("schedule_early_distill_threshold"), 15, "提前蒸馏阈值"),
+            },
+            "distill": {
+                "lookback_days": safe_int(form.get("distill_lookback_days"), 30, "回看天数"),
+                "initial_fetch_count": safe_int(form.get("distill_initial_fetch_count"), 500, "首次拉取数量"),
+                "batch_size": safe_int(form.get("distill_batch_size"), 10, "批量大小"),
+            },
+            "web": {
+                "password": form.get("web_password", "admin"),
+                "port": safe_int(form.get("web_port"), 8088, "端口"),
+            },
+        }
+
+        # 数值范围校验
+        if config_data["schedule"]["fetch_interval_hours"] < 1:
+            return JSONResponse({"error": "抓取间隔至少为1小时"}, status_code=400)
+        if not (0 <= config_data["schedule"]["distill_day"] <= 6):
+            return JSONResponse({"error": "蒸馏日必须是0-6（0=周一，6=周日）"}, status_code=400)
+        if config_data["distill"]["lookback_days"] < 1:
+            return JSONResponse({"error": "回看天数至少为1天"}, status_code=400)
+        if config_data["distill"]["batch_size"] < 1:
+            return JSONResponse({"error": "批量大小至少为1"}, status_code=400)
+        if not (1 <= config_data["web"]["port"] <= 65535):
+            return JSONResponse({"error": "端口号必须在1-65535之间"}, status_code=400)
+
+        for temp_key in ["temperature_classify", "temperature_distill", "temperature_discuss"]:
+            val = config_data["llm"][temp_key]
+            if not (0.0 <= val <= 2.0):
+                return JSONResponse({"error": f"温度参数必须在0-2之间，当前{temp_key}={val}"}, status_code=400)
+
+    except ValueError as e:
+        return JSONResponse({"error": f"配置参数格式错误: {e}"}, status_code=400)
 
     config_path = ROOT_DIR / "config.yaml"
     # 备份旧配置
@@ -701,8 +798,15 @@ async def api_save_settings(request: Request):
         shutil.copy2(config_path, backup_path)
 
     # 写入新配置
-    with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    except Exception as e:
+        # 如果写入失败，尝试恢复备份
+        if backup_path.exists():
+            import shutil
+            shutil.copy2(backup_path, config_path)
+        return JSONResponse({"error": f"配置写入失败: {e}，已恢复旧配置"}, status_code=500)
 
     return JSONResponse({"message": "配置已保存"})
 

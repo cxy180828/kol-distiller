@@ -237,10 +237,14 @@ async def cmd_list():
         total = "-"
         last_fetch = "-"
         if meta_path.exists():
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-                total = str(meta.get("total_tweets", 0))
-                last_fetch = meta.get("last_fetch_time", "-")[:16]
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    total = str(meta.get("total_tweets", 0))
+                    last_fetch = meta.get("last_fetch_time", "-")[:16]
+            except (json.JSONDecodeError, KeyError):
+                total = "数据损坏"
+                last_fetch = "数据损坏"
 
         has_p = "✅" if has_profile(handle) else "❌"
         table.add_row(f"@{handle}", has_p, total, last_fetch)
@@ -259,12 +263,17 @@ async def cmd_status(handle: str):
     meta_path = kol_dir / "meta.json"
 
     if not meta_path.exists():
-        console.print(f"\n[red]❌ @{handle} 不存在，请先添加[/red]\n")
+        console.print(f"\n[red]❌ @{handle} 不存在，请先添加[/red]")
+        console.print(f"  使用: [bold]python main.py add @{handle}[/bold]\n")
         return
 
     import json
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except json.JSONDecodeError:
+        console.print(f"\n[red]❌ @{handle} 的数据文件损坏，建议删除后重新添加[/red]\n")
+        return
 
     console.print(f"\n[bold]📊 @{handle} 状态[/bold]\n")
     console.print(f"  总推文数: {meta.get('total_tweets', 0)}")
@@ -349,53 +358,72 @@ def main():
 
     cmd = sys.argv[1].lower()
 
-    if cmd == "add":
-        if len(sys.argv) < 3:
-            console.print("[red]用法: python main.py add @handle[/red]")
+    try:
+        if cmd == "add":
+            if len(sys.argv) < 3:
+                console.print("[red]用法: python main.py add @handle[/red]")
+                sys.exit(1)
+            asyncio.run(cmd_add(sys.argv[2]))
+
+        elif cmd == "discuss":
+            if len(sys.argv) < 3:
+                console.print("[red]用法: python main.py discuss BTC [@kol1 @kol2 ...][/red]")
+                sys.exit(1)
+            coin = sys.argv[2]
+            handles = sys.argv[3:] if len(sys.argv) > 3 else None
+            asyncio.run(cmd_discuss(coin, handles))
+
+        elif cmd == "update":
+            if len(sys.argv) < 3:
+                console.print("[red]用法: python main.py update @handle[/red]")
+                sys.exit(1)
+            asyncio.run(cmd_update(sys.argv[2]))
+
+        elif cmd == "update-all":
+            asyncio.run(cmd_update_all())
+
+        elif cmd == "distill":
+            if len(sys.argv) < 3:
+                console.print("[red]用法: python main.py distill @handle[/red]")
+                sys.exit(1)
+            asyncio.run(cmd_distill(sys.argv[2]))
+
+        elif cmd == "distill-all":
+            asyncio.run(cmd_distill_all())
+
+        elif cmd == "list":
+            asyncio.run(cmd_list())
+
+        elif cmd == "status":
+            if len(sys.argv) < 3:
+                console.print("[red]用法: python main.py status @handle[/red]")
+                sys.exit(1)
+            asyncio.run(cmd_status(sys.argv[2]))
+
+        elif cmd == "cron":
+            asyncio.run(cmd_cron())
+
+        else:
+            console.print(f"[red]未知命令: {cmd}[/red]")
+            print(__doc__)
             sys.exit(1)
-        asyncio.run(cmd_add(sys.argv[2]))
 
-    elif cmd == "discuss":
-        if len(sys.argv) < 3:
-            console.print("[red]用法: python main.py discuss BTC [@kol1 @kol2 ...][/red]")
-            sys.exit(1)
-        coin = sys.argv[2]
-        handles = sys.argv[3:] if len(sys.argv) > 3 else None
-        asyncio.run(cmd_discuss(coin, handles))
-
-    elif cmd == "update":
-        if len(sys.argv) < 3:
-            console.print("[red]用法: python main.py update @handle[/red]")
-            sys.exit(1)
-        asyncio.run(cmd_update(sys.argv[2]))
-
-    elif cmd == "update-all":
-        asyncio.run(cmd_update_all())
-
-    elif cmd == "distill":
-        if len(sys.argv) < 3:
-            console.print("[red]用法: python main.py distill @handle[/red]")
-            sys.exit(1)
-        asyncio.run(cmd_distill(sys.argv[2]))
-
-    elif cmd == "distill-all":
-        asyncio.run(cmd_distill_all())
-
-    elif cmd == "list":
-        asyncio.run(cmd_list())
-
-    elif cmd == "status":
-        if len(sys.argv) < 3:
-            console.print("[red]用法: python main.py status @handle[/red]")
-            sys.exit(1)
-        asyncio.run(cmd_status(sys.argv[2]))
-
-    elif cmd == "cron":
-        asyncio.run(cmd_cron())
-
-    else:
-        print(f"未知命令: {cmd}")
-        print(__doc__)
+    except FileNotFoundError as e:
+        console.print(f"\n[red]❌ 文件未找到: {e}[/red]")
+        console.print("[yellow]提示: 请确认config.yaml是否存在，或先添加KOL[/yellow]\n")
+        sys.exit(1)
+    except ValueError as e:
+        console.print(f"\n[red]❌ 配置错误: {e}[/red]\n")
+        sys.exit(1)
+    except RuntimeError as e:
+        console.print(f"\n[red]❌ 运行错误: {e}[/red]\n")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]已取消操作[/yellow]\n")
+        sys.exit(0)
+    except Exception as e:
+        console.print(f"\n[red]❌ 未预期的错误: {type(e).__name__}: {e}[/red]")
+        console.print("[yellow]如果问题持续出现，请检查配置文件和网络连接[/yellow]\n")
         sys.exit(1)
 
 

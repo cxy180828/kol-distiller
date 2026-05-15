@@ -77,8 +77,22 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             f"请复制 config.example.yaml 为 config.yaml 并填入你的配置"
         )
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValueError(
+            f"配置文件格式错误，无法解析YAML:\n"
+            f"  文件: {config_path}\n"
+            f"  错误: {e}\n"
+            f"  请检查缩进、冒号后的空格等YAML语法"
+        )
+
+    if not raw or not isinstance(raw, dict):
+        raise ValueError(
+            f"配置文件内容为空或格式不正确: {config_path}\n"
+            f"请参照 config.example.yaml 填写配置"
+        )
 
     # 验证必填字段
     _validate_config(raw)

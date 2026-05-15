@@ -101,6 +101,8 @@ class DiscussionEngine:
             完整的讨论记录（Markdown格式）
         """
         coin = coin.upper().strip()
+        if not coin:
+            return "❌ 请指定要讨论的币种（如 BTC、ETH、SOL）。"
 
         # 确定参与讨论的KOL
         if kol_handles is None:
@@ -131,13 +133,29 @@ class DiscussionEngine:
         analyses = {}
         for handle in available:
             print(f"  💭 @{handle} 正在分析...")
-            analysis = await self._agent_analyze(handle, coin, market_context)
-            analyses[handle] = analysis
-            print(f"  ✅ @{handle} 完成")
+            try:
+                analysis = await self._agent_analyze(handle, coin, market_context)
+                analyses[handle] = analysis
+                print(f"  ✅ @{handle} 完成")
+            except Exception as e:
+                print(f"  ❌ @{handle} 分析失败: {e}")
+                analyses[handle] = f"（分析失败：{e}）"
+
+        if not any(
+            not v.startswith("（分析失败") for v in analyses.values()
+        ):
+            return (
+                f"❌ 所有KOL Agent分析{coin}都失败了，可能是LLM服务不可用。\n"
+                f"请检查LLM配置（API地址、Key、模型名称）是否正确。"
+            )
 
         # 汇总
         print(f"\n📋 生成汇总...")
-        summary = await self._summarize(coin, analyses)
+        try:
+            summary = await self._summarize(coin, analyses)
+        except Exception as e:
+            print(f"  ⚠️ 汇总生成失败: {e}")
+            summary = "（汇总生成失败，请查看各KOL独立分析）"
 
         # 拼接完整讨论记录
         full_discussion = self._format_discussion(coin, market_context, analyses, summary)
