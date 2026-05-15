@@ -34,24 +34,39 @@ class TweetScraper:
         # 优先使用cookies.json文件（最可靠的方式）
         cookies_path = Path(__file__).parent.parent / "cookies.json"
         if cookies_path.exists():
-            self.client.load_cookies(str(cookies_path))
-            return
+            try:
+                self.client.load_cookies(str(cookies_path))
+                return
+            except Exception as e:
+                raise RuntimeError(
+                    f"cookies.json 加载失败（可能已过期），请到【设置】页面重新登录Twitter。\n"
+                    f"（错误: {e}）"
+                )
 
-        # 如果有用户名密码，用登录方式（推荐）
+        # 如果有用户名密码，用登录方式
         username = getattr(self.config.twitter, 'username', None) or ""
         password = getattr(self.config.twitter, 'password', None) or ""
         email = getattr(self.config.twitter, 'email', None) or ""
 
         if username and password:
-            await self.client.login(
-                auth_info_1=username,
-                auth_info_2=email,
-                password=password,
-                cookies_file=str(cookies_path),
-            )
-            return
+            try:
+                await self.client.login(
+                    auth_info_1=username,
+                    auth_info_2=email,
+                    password=password,
+                    cookies_file=str(cookies_path),
+                )
+                return
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "2fa" in error_msg or "totp" in error_msg or "confirmation" in error_msg:
+                    raise RuntimeError(
+                        "此账号开启了2FA验证，无法通过命令行自动登录。\n"
+                        "请到Web端【设置】页面手动登录（支持输入2FA验证码）。"
+                    )
+                raise RuntimeError(f"Twitter登录失败: {e}")
 
-        # 兜底：使用auth_token和ct0（不稳定，可能失败）
+        # 兜底：使用auth_token和ct0（不稳定）
         auth_token = self.config.twitter.auth_token
         ct0 = self.config.twitter.ct0
         if auth_token and ct0:
@@ -63,8 +78,8 @@ class TweetScraper:
             return
 
         raise RuntimeError(
-            "Twitter未配置。请在config.yaml中配置twitter.username+password，"
-            "或者提供cookies.json文件。"
+            "❌ Twitter未登录。请到Web端【设置】页面登录Twitter账号。\n"
+            "（需要用户名+密码，支持2FA验证码）"
         )
 
     async def fetch_user_tweets(
@@ -134,7 +149,23 @@ class TweetScraper:
             return tweets
 
         except Exception as e:
-            raise RuntimeError(f"抓取 @{handle} 推文失败: {e}")
+            error_msg = str(e)
+
+            # 检测Cookie过期/登录失效的常见错误
+            cookie_expired_keywords = [
+                "KEY_BYTE", "unauthorized", "401", "403",
+                "Could not authenticate", "InvalidToken",
+                "BadRequest", "session", "expired",
+            ]
+            is_cookie_error = any(kw.lower() in error_msg.lower() for kw in cookie_expired_keywords)
+
+            if is_cookie_error:
+                raise RuntimeError(
+                    f"Twitter登录已过期或无效，请到【设置】页面重新登录Twitter。\n"
+                    f"（原始错误: {error_msg}）"
+                )
+            else:
+                raise RuntimeError(f"抓取 @{handle} 推文失败: {error_msg}")
 
     def _parse_tweet(self, tweet, handle: str) -> dict:
         """解析单条推文为标准格式"""

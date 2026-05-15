@@ -515,6 +515,108 @@ async def api_notifications(request: Request):
     return JSONResponse(task_manager.get_recent_tasks(10))
 
 
+# Twitter登录状态管理
+_twitter_login_state = {"client": None, "status": "idle", "error": None}
+
+
+@app.post("/api/twitter/login")
+async def api_twitter_login(request: Request):
+    """第一步：发起Twitter登录（输入用户名密码）"""
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    username = form.get("username", "").strip()
+    password = form.get("password", "").strip()
+    email = form.get("email", "").strip()
+
+    if not username or not password:
+        return JSONResponse({"error": "用户名和密码不能为空"}, status_code=400)
+
+    from twikit import Client
+
+    try:
+        client = Client("zh-CN")
+        cookies_path = str(ROOT_DIR / "cookies.json")
+
+        # 尝试登录，可能需要2FA
+        try:
+            await client.login(
+                auth_info_1=username,
+                auth_info_2=email,
+                password=password,
+                cookies_file=cookies_path,
+            )
+            # 登录成功，不需要2FA
+            _twitter_login_state["client"] = None
+            _twitter_login_state["status"] = "idle"
+            return JSONResponse({"status": "success", "message": "✅ 登录成功，cookies.json 已生成"})
+        except Exception as e:
+            error_msg = str(e).lower()
+            # 检测是否需要2FA
+            if "confirmation" in error_msg or "challenge" in error_msg or "2fa" in error_msg or "totp" in error_msg or "verification" in error_msg:
+                _twitter_login_state["client"] = client
+                _twitter_login_state["status"] = "need_2fa"
+                return JSONResponse({"status": "need_2fa", "message": "请输入2FA验证码"})
+            else:
+                return JSONResponse({"error": f"登录失败: {e}"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"初始化失败: {e}"}, status_code=500)
+
+
+@app.post("/api/twitter/verify_2fa")
+async def api_twitter_verify_2fa(request: Request):
+    """第二步：输入2FA验证码完成登录"""
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    code = form.get("code", "").strip()
+
+    if not code:
+        return JSONResponse({"error": "验证码不能为空"}, status_code=400)
+
+    client = _twitter_login_state.get("client")
+    if client is None or _twitter_login_state["status"] != "need_2fa":
+        return JSONResponse({"error": "请先发起登录"}, status_code=400)
+
+    try:
+        cookies_path = str(ROOT_DIR / "cookies.json")
+        # twikit的2FA验证
+        await client.totp_login(code, cookies_file=cookies_path)
+        _twitter_login_state["client"] = None
+        _twitter_login_state["status"] = "idle"
+        return JSONResponse({"status": "success", "message": "✅ 2FA验证成功，cookies.json 已生成"})
+    except Exception as e:
+        _twitter_login_state["client"] = None
+        _twitter_login_state["status"] = "idle"
+        return JSONResponse({"error": f"2FA验证失败: {e}"}, status_code=400)
+
+
+@app.get("/api/twitter/status")
+async def api_twitter_status(request: Request):
+    """检查Twitter登录状态"""
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    cookies_path = ROOT_DIR / "cookies.json"
+    if cookies_path.exists():
+        import os
+        mtime = os.path.getmtime(cookies_path)
+        from datetime import datetime
+        login_time = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        return JSONResponse({
+            "logged_in": True,
+            "login_time": login_time,
+            "cookies_file": str(cookies_path),
+        })
+    else:
+        return JSONResponse({
+            "logged_in": False,
+            "message": "未登录Twitter，请先登录",
+        })
+
+
 @app.post("/api/settings/save")
 async def api_save_settings(request: Request):
     if not check_auth(request):
