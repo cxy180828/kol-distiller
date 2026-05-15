@@ -178,18 +178,32 @@ def load_tagged_tweets(
             if categories and tweet.get("category") not in categories:
                 continue
 
-            # 时间过滤
+            # 时间过滤 - 优先用推文本身的发布时间(time)，而不是抓取时间(fetched_at)
             if days is not None:
                 from datetime import datetime, timezone, timedelta
-                fetched = tweet.get("fetched_at") or tweet.get("time", "")
-                if fetched:
+                # 优先用推文发布时间
+                time_str = tweet.get("time", "") or tweet.get("fetched_at", "")
+                if time_str:
                     try:
-                        t = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+                        # twikit返回的时间格式多样，尝试多种解析
+                        if "+" in time_str or time_str.endswith("Z"):
+                            t = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                        else:
+                            # 尝试解析 "Wed Oct 10 20:19:24 +0000 2018" 格式
+                            try:
+                                t = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
+                            except ValueError:
+                                # 回退到fetched_at
+                                fetched = tweet.get("fetched_at", "")
+                                if fetched:
+                                    t = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+                                else:
+                                    continue
                         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
                         if t < cutoff:
                             continue
                     except (ValueError, TypeError):
-                        pass
+                        pass  # 解析失败就不过滤，保留该推文
 
             tweets.append(tweet)
 

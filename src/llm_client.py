@@ -26,14 +26,16 @@ class LLMClient:
         messages: list[dict],
         temperature: Optional[float] = None,
         max_tokens: int = 4096,
+        max_retries: int = 3,
     ) -> str:
         """
-        发送聊天请求
+        发送聊天请求（带重试）
 
         Args:
             messages: [{"role": "system/user/assistant", "content": "..."}]
             temperature: 温度参数，None则用默认
             max_tokens: 最大输出token数
+            max_retries: 最大重试次数
 
         Returns:
             模型回复的文本内容
@@ -48,20 +50,51 @@ class LLMClient:
             "max_tokens": max_tokens,
         }
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.headers,
-                json=payload,
-            )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=self.headers,
+                        json=payload,
+                    )
 
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"LLM调用失败 [{resp.status_code}]: {resp.text}"
-                )
+                    if resp.status_code != 200:
+                        error_text = resp.text
+                        # 如果是限流，等一会重试
+                        if resp.status_code == 429:
+                            import asyncio
+                            wait_time = (attempt + 1) * 5
+                            print(f"  ⚠️ API限流，等待{wait_time}秒后重试...")
+                            await asyncio.sleep(wait_time)
+                            last_error = f"API限流 [{resp.status_code}]"
+                            continue
+                        raise RuntimeError(
+                            f"LLM调用失败 [{resp.status_code}]: {error_text}"
+                        )
 
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"]
+
+            except httpx.TimeoutException:
+                last_error = "请求超时"
+                if attempt < max_retries - 1:
+                    import asyncio
+                    print(f"  ⚠️ LLM请求超时，重试({attempt+1}/{max_retries})...")
+                    await asyncio.sleep(2)
+                    continue
+            except RuntimeError:
+                raise  # 非超时的RuntimeError直接抛出
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries - 1:
+                    import asyncio
+                    print(f"  ⚠️ LLM调用异常: {e}，重试({attempt+1}/{max_retries})...")
+                    await asyncio.sleep(2)
+                    continue
+
+        raise RuntimeError(f"LLM调用失败（重试{max_retries}次后仍失败）: {last_error}")
 
     async def chat_json(
         self,

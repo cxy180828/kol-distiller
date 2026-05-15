@@ -51,10 +51,28 @@ from src.market_data import MarketDataClient
 class TaskManager:
     """管理后台异步任务"""
 
+    MAX_TASKS = 200  # 最多保留200条任务记录
+
     def __init__(self):
         self.tasks: dict[str, dict] = {}  # task_id -> {status, progress, result, error}
 
+    def _cleanup_old_tasks(self):
+        """清理超出限制的旧任务"""
+        if len(self.tasks) < self.MAX_TASKS:
+            return
+        # 按创建时间排序，删除最旧的已完成任务
+        completed = [
+            tid for tid, t in self.tasks.items()
+            if t["status"] in ("completed", "failed")
+        ]
+        completed.sort(key=lambda tid: self.tasks[tid]["created_at"])
+        # 删除一半旧任务腾出空间
+        to_remove = completed[:max(len(completed) // 2, 1)]
+        for tid in to_remove:
+            del self.tasks[tid]
+
     def create_task(self, task_type: str, description: str) -> str:
+        self._cleanup_old_tasks()
         task_id = secrets.token_hex(8)
         self.tasks[task_id] = {
             "id": task_id,
@@ -115,7 +133,16 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="KOL Distiller", lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
+
+# session secret固定化：从文件读取或首次生成后保存
+_session_secret_path = ROOT_DIR / ".session_secret"
+if _session_secret_path.exists():
+    _session_secret = _session_secret_path.read_text().strip()
+else:
+    _session_secret = secrets.token_hex(32)
+    _session_secret_path.write_text(_session_secret)
+
+app.add_middleware(SessionMiddleware, secret_key=_session_secret)
 
 # 静态文件和模板
 STATIC_DIR = ROOT_DIR / "web_static"
@@ -359,6 +386,11 @@ async def api_add_kol(request: Request, handle: str = Form(...)):
     handle = handle.lstrip("@").strip()
     if not handle:
         return JSONResponse({"error": "handle不能为空"}, status_code=400)
+
+    # 检查是否已存在
+    existing_kols = list_kols()
+    if handle in existing_kols:
+        return JSONResponse({"error": f"@{handle} 已存在，如需更新请使用「更新」按钮"}, status_code=400)
 
     # 创建后台任务
     task_id = task_manager.create_task("add_kol", f"添加 @{handle}")

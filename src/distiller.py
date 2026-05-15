@@ -114,7 +114,9 @@ class ProfileDistiller:
 
         if not tweets:
             raise ValueError(
-                f"@{handle} 没有有效的标注推文，请先抓取并分类"
+                f"@{handle} 没有有效的交易相关推文（全部被归类为噪音）。\n"
+                f"可能原因：该KOL近{lookback_days}天没发过交易相关内容，或推文数量太少。\n"
+                f"建议：增大distill.lookback_days或distill.initial_fetch_count后重试。"
             )
 
         # 构建推文摘要给LLM

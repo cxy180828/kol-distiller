@@ -223,7 +223,7 @@ class TweetScraper:
 
 def save_tweets(handle: str, tweets: list[dict]):
     """
-    保存推文到文件（追加写入JSONL）并更新meta
+    保存推文到文件（追加写入JSONL）并更新meta，自动去重
     """
     handle = handle.lstrip("@")
     kol_dir = get_kol_dir(handle)
@@ -233,9 +233,27 @@ def save_tweets(handle: str, tweets: list[dict]):
     if not tweets:
         return
 
+    # 加载已有的推文ID用于去重
+    existing_ids = set()
+    if raw_path.exists():
+        with open(raw_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        existing_ids.add(json.loads(line).get("id"))
+                    except json.JSONDecodeError:
+                        pass
+
+    # 过滤重复
+    new_tweets = [t for t in tweets if t.get("id") not in existing_ids]
+
+    if not new_tweets:
+        return
+
     # 追加写入原始推文
     with open(raw_path, "a", encoding="utf-8") as f:
-        for tweet in tweets:
+        for tweet in new_tweets:
             f.write(json.dumps(tweet, ensure_ascii=False) + "\n")
 
     # 更新meta
@@ -248,7 +266,7 @@ def save_tweets(handle: str, tweets: list[dict]):
     meta["handle"] = handle
     meta["latest_tweet_id"] = tweets[0]["id"]
     meta["last_fetch_time"] = datetime.now(timezone.utc).isoformat()
-    meta["total_tweets"] = meta.get("total_tweets", 0) + len(tweets)
+    meta["total_tweets"] = meta.get("total_tweets", 0) + len(new_tweets)
 
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)

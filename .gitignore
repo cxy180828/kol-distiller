@@ -1,5 +1,7 @@
 # 敏感配置
 config.yaml
+.session_secret
+cookies.json
 
 # 数据文件（可选择是否提交）
 kols/*/tweets_raw.jsonl
