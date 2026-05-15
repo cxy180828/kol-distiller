@@ -31,10 +31,13 @@ class TweetScraper:
 
         self.client = Client("zh-CN")
         # 使用cookie登录（不需要用户名密码）
-        self.client.set_cookies({
+        cookies = {
             "auth_token": self.config.twitter.auth_token,
             "ct0": self.config.twitter.ct0,
-        })
+        }
+        self.client.set_cookies(cookies)
+        # 设置csrf token（twikit需要）
+        self.client._token = self.config.twitter.ct0
 
     async def fetch_user_tweets(
         self,

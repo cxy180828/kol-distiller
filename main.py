@@ -40,7 +40,12 @@ async def cmd_add(handle: str):
     # Step 1: 抓取历史推文
     console.print("[bold]Step 1/3: 抓取历史推文[/bold]")
     scraper = TweetScraper(config)
-    tweets = await scraper.fetch_initial(handle)
+    try:
+        tweets = await scraper.fetch_initial(handle)
+    except Exception as e:
+        console.print(f"[red]❌ 抓取失败: {e}[/red]")
+        console.print("[yellow]提示: 请检查Twitter Cookie是否有效（auth_token和ct0）[/yellow]")
+        return
 
     if not tweets:
         console.print("[red]❌ 未获取到任何推文，请检查handle是否正确[/red]")
@@ -105,7 +110,12 @@ async def cmd_update(handle: str):
     # 增量抓取
     console.print("[bold]Step 1/3: 增量抓取推文[/bold]")
     scraper = TweetScraper(config)
-    tweets = await scraper.fetch_incremental(handle)
+    try:
+        tweets = await scraper.fetch_incremental(handle)
+    except Exception as e:
+        console.print(f"[red]❌ 抓取失败: {e}[/red]")
+        console.print("[yellow]提示: 请检查Twitter Cookie是否有效[/yellow]")
+        return
 
     if tweets:
         save_tweets(handle, tweets)
