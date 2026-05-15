@@ -14,11 +14,13 @@ llm:
   temperature_discuss: 0.7
 
 twitter:
-  # Twitter/X 小号的cookie信息
-  # 获取方式：浏览器登录X → F12 → Application → Cookies → x.com
-  # 复制 auth_token 和 ct0 的值
-  auth_token: "你的auth_token"
-  ct0: "你的ct0"
+  # 方式一（推荐）：用户名密码登录，首次登录后自动保存cookies.json
+  username: "你的X小号用户名"
+  password: "你的X小号密码"
+  email: "你的X小号邮箱"
+  # 方式二（备用）：直接填cookie（不稳定，容易失效）
+  # auth_token: ""
+  # ct0: ""
 
 market_data:
   # 行情数据来源

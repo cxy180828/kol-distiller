@@ -26,8 +26,13 @@ class LLMConfig:
 
 @dataclass
 class TwitterConfig:
-    auth_token: str
-    ct0: str
+    # 方式一（推荐）：用户名密码登录
+    username: str = ""
+    password: str = ""
+    email: str = ""
+    # 方式二（备用）：直接填cookie
+    auth_token: str = ""
+    ct0: str = ""
 
 
 @dataclass
@@ -100,12 +105,15 @@ def _validate_config(raw: dict):
     if not llm.get("model"):
         errors.append("llm.model 未配置")
 
-    # Twitter配置
+    # Twitter配置 - 至少需要一种方式
     twitter = raw.get("twitter", {})
-    if not twitter.get("auth_token"):
-        errors.append("twitter.auth_token 未配置")
-    if not twitter.get("ct0"):
-        errors.append("twitter.ct0 未配置")
+    has_login = twitter.get("username") and twitter.get("password")
+    has_cookies = twitter.get("auth_token") and twitter.get("ct0")
+    cookies_file = Path(__file__).parent.parent / "cookies.json"
+    has_cookies_file = cookies_file.exists()
+
+    if not has_login and not has_cookies and not has_cookies_file:
+        errors.append("twitter未配置: 需要username+password，或auth_token+ct0，或cookies.json文件")
 
     if errors:
         raise ValueError(

@@ -329,8 +329,9 @@ async def settings_page(request: Request):
             "llm_temperature_classify": llm.get("temperature_classify", 0.1),
             "llm_temperature_distill": llm.get("temperature_distill", 0.3),
             "llm_temperature_discuss": llm.get("temperature_discuss", 0.7),
-            "twitter_auth_token": twitter.get("auth_token", ""),
-            "twitter_ct0": twitter.get("ct0", ""),
+            "twitter_username": twitter.get("username", ""),
+            "twitter_password": twitter.get("password", ""),
+            "twitter_email": twitter.get("email", ""),
             "market_data_source": market.get("source", "binance"),
             "market_data_base_url": market.get("base_url", "https://api.binance.com"),
             "schedule_fetch_interval_hours": schedule.get("fetch_interval_hours", 6),
@@ -534,8 +535,9 @@ async def api_save_settings(request: Request):
             "temperature_discuss": float(form.get("llm_temperature_discuss", 0.7)),
         },
         "twitter": {
-            "auth_token": form.get("twitter_auth_token", ""),
-            "ct0": form.get("twitter_ct0", ""),
+            "username": form.get("twitter_username", ""),
+            "password": form.get("twitter_password", ""),
+            "email": form.get("twitter_email", ""),
         },
         "market_data": {
             "source": form.get("market_data_source", "binance"),

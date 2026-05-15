@@ -30,14 +30,42 @@ class TweetScraper:
             return
 
         self.client = Client("zh-CN")
-        # 使用cookie登录（不需要用户名密码）
-        cookies = {
-            "auth_token": self.config.twitter.auth_token,
-            "ct0": self.config.twitter.ct0,
-        }
-        self.client.set_cookies(cookies)
-        # 设置csrf token（twikit需要）
-        self.client._token = self.config.twitter.ct0
+
+        # 优先使用cookies.json文件（最可靠的方式）
+        cookies_path = Path(__file__).parent.parent / "cookies.json"
+        if cookies_path.exists():
+            self.client.load_cookies(str(cookies_path))
+            return
+
+        # 如果有用户名密码，用登录方式（推荐）
+        username = getattr(self.config.twitter, 'username', None) or ""
+        password = getattr(self.config.twitter, 'password', None) or ""
+        email = getattr(self.config.twitter, 'email', None) or ""
+
+        if username and password:
+            await self.client.login(
+                auth_info_1=username,
+                auth_info_2=email,
+                password=password,
+                cookies_file=str(cookies_path),
+            )
+            return
+
+        # 兜底：使用auth_token和ct0（不稳定，可能失败）
+        auth_token = self.config.twitter.auth_token
+        ct0 = self.config.twitter.ct0
+        if auth_token and ct0:
+            self.client.set_cookies({
+                "auth_token": auth_token,
+                "ct0": ct0,
+            })
+            self.client._token = ct0
+            return
+
+        raise RuntimeError(
+            "Twitter未配置。请在config.yaml中配置twitter.username+password，"
+            "或者提供cookies.json文件。"
+        )
 
     async def fetch_user_tweets(
         self,

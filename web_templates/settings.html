@@ -43,24 +43,28 @@
 <div class="card">
     <div class="card-header"><h2>🐦 Twitter / X</h2></div>
     <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">
-        获取方式：浏览器登录X → F12 → Application → Cookies → x.com → 复制 auth_token 和 ct0
+        推荐方式：填用户名+密码+邮箱，首次登录后自动保存cookies.json，之后不再需要密码
     </p>
     <div class="settings-grid">
         <div class="form-group">
-            <label>auth_token <span class="badge badge-warning">敏感</span></label>
+            <label>用户名 <span class="hint">X小号的用户名</span></label>
+            <input type="text" name="twitter_username" class="form-input" placeholder="your_username" value="{{ config.twitter_username }}">
+        </div>
+        <div class="form-group">
+            <label>密码 <span class="badge badge-warning">敏感</span></label>
             <div class="secret-input">
-                <input type="password" name="twitter_auth_token" class="form-input" placeholder="你的auth_token" value="{{ config.twitter_auth_token }}">
+                <input type="password" name="twitter_password" class="form-input" placeholder="小号密码" value="{{ config.twitter_password }}">
                 <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
             </div>
         </div>
         <div class="form-group">
-            <label>ct0 <span class="badge badge-warning">敏感</span></label>
-            <div class="secret-input">
-                <input type="password" name="twitter_ct0" class="form-input" placeholder="你的ct0" value="{{ config.twitter_ct0 }}">
-                <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
-            </div>
+            <label>邮箱 <span class="hint">注册时用的邮箱</span></label>
+            <input type="text" name="twitter_email" class="form-input" placeholder="email@example.com" value="{{ config.twitter_email }}">
         </div>
     </div>
+    <p style="font-size:11px; color:var(--text-dim); margin-top:8px;">
+        备用方式：如果有cookies.json文件放在项目根目录，会自动使用，无需填写以上信息
+    </p>
 </div>
 
 <!-- 行情数据 -->
