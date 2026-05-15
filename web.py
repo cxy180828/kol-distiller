@@ -158,14 +158,13 @@ async def login_page(request: Request, error: str = None):
 @app.post("/login")
 async def login_submit(request: Request, password: str = Form(...)):
     try:
-        config = load_config()
-        # 密码存在config.yaml里的web.password字段
-        correct_password = getattr(config, 'web_password', None)
-        if correct_password is None:
-            # 从yaml原始数据读
+        correct_password = "admin"
+
+        config_path = ROOT_DIR / "config.yaml"
+        if config_path.exists():
             import yaml
-            with open(ROOT_DIR / "config.yaml", "r", encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
             correct_password = raw.get("web", {}).get("password", "admin")
 
         if password == correct_password:
