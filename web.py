@@ -12,10 +12,7 @@ import json
 import asyncio
 import hashlib
 import secrets
-from datetime import datetime, timezone, timedelta
-
-# 北京时间 UTC+8
-CN_TZ = timezone(timedelta(hours=8))
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -85,7 +82,7 @@ class TaskManager:
             "progress": "",
             "result": None,
             "error": None,
-            "created_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
         }
         return task_id
@@ -98,13 +95,13 @@ class TaskManager:
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "completed"
             self.tasks[task_id]["result"] = result
-            self.tasks[task_id]["completed_at"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def fail_task(self, task_id: str, error: str):
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "failed"
             self.tasks[task_id]["error"] = error
-            self.tasks[task_id]["completed_at"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def get_task(self, task_id: str) -> Optional[dict]:
         return self.tasks.get(task_id)
@@ -710,7 +707,8 @@ async def api_twitter_status(request: Request):
     if cookies_path.exists():
         import os
         mtime = os.path.getmtime(cookies_path)
-        login_time = datetime.fromtimestamp(mtime, tz=CN_TZ).strftime("%Y-%m-%d %H:%M")
+        from datetime import datetime
+        login_time = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         return JSONResponse({
             "logged_in": True,
             "login_time": login_time,

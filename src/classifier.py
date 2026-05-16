@@ -186,7 +186,6 @@ def load_tagged_tweets(
             # 时间过滤 - 优先用推文本身的发布时间(time)，而不是抓取时间(fetched_at)
             if days is not None:
                 from datetime import datetime, timezone, timedelta
-                CN_TZ = timezone(timedelta(hours=8))
                 # 优先用推文发布时间
                 time_str = tweet.get("time", "") or tweet.get("fetched_at", "")
                 if time_str:
@@ -199,20 +198,13 @@ def load_tagged_tweets(
                             try:
                                 t = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
                             except ValueError:
-                                # 尝试解析 "2025-05-15 23:10:30" 格式（北京时间）
-                                try:
-                                    t = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ)
-                                except ValueError:
-                                    # 回退到fetched_at
-                                    fetched = tweet.get("fetched_at", "")
-                                    if fetched:
-                                        try:
-                                            t = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-                                        except ValueError:
-                                            t = datetime.strptime(fetched, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ)
-                                    else:
-                                        continue
-                        cutoff = datetime.now(CN_TZ) - timedelta(days=days)
+                                # 回退到fetched_at
+                                fetched = tweet.get("fetched_at", "")
+                                if fetched:
+                                    t = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+                                else:
+                                    continue
+                        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
                         if t < cutoff:
                             continue
                     except (ValueError, TypeError):

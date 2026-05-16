@@ -6,10 +6,7 @@
 
 import json
 import shutil
-from datetime import datetime, timezone, timedelta
-
-# 北京时间 UTC+8
-CN_TZ = timezone(timedelta(hours=8))
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import AppConfig, get_kol_dir
@@ -126,7 +123,7 @@ class ProfileDistiller:
         tweets_summary = self._build_tweets_summary(tweets)
 
         # 调用LLM蒸馏
-        timestamp = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M (北京时间)")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         prompt = DISTILL_PROMPT.format(
             handle=handle,
             timestamp=timestamp,
@@ -187,7 +184,7 @@ def save_profile(handle: str, profile_text: str):
 
     # 如果已有旧profile，备份到history
     if profile_path.exists():
-        date_str = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+        date_str = datetime.now().strftime("%Y-%m-%d")
         backup_path = history_dir / f"profile_{date_str}.md"
         # 如果今天已经有备份，加序号
         if backup_path.exists():

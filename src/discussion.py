@@ -5,10 +5,7 @@
 """
 
 import json
-from datetime import datetime, timezone, timedelta
-
-# 北京时间 UTC+8
-CN_TZ = timezone(timedelta(hours=8))
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import AppConfig, DISCUSSIONS_DIR, list_kols
@@ -223,7 +220,7 @@ class DiscussionEngine:
         summary: str,
     ) -> str:
         """格式化完整讨论记录"""
-        now = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M (北京时间)")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         doc = f"""# {coin} 多KOL讨论记录
 
@@ -254,7 +251,7 @@ class DiscussionEngine:
     def _save_discussion(self, coin: str, content: str):
         """保存讨论记录到文件"""
         DISCUSSIONS_DIR.mkdir(exist_ok=True)
-        date_str = datetime.now(CN_TZ).strftime("%Y-%m-%d_%H%M")
+        date_str = datetime.now().strftime("%Y-%m-%d_%H%M")
         filename = f"{date_str}_{coin}.md"
         filepath = DISCUSSIONS_DIR / filename
 
