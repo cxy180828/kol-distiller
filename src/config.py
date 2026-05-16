@@ -94,9 +94,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     # 验证必填字段
     _validate_config(raw)
 
+    # 构建 TwitterConfig 时只取有效字段（兼容旧版config含username/password/email的情况）
+    twitter_raw = raw.get("twitter", {})
+    twitter_kwargs = {
+        k: v for k, v in twitter_raw.items()
+        if k in ("auth_token", "ct0")
+    }
+
     return AppConfig(
         llm=LLMConfig(**raw["llm"]),
-        twitter=TwitterConfig(**raw["twitter"]),
+        twitter=TwitterConfig(**twitter_kwargs),
         market_data=MarketDataConfig(**raw.get("market_data", {})),
         schedule=ScheduleConfig(**raw.get("schedule", {})),
         distill=DistillConfig(**raw.get("distill", {})),
