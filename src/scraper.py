@@ -477,6 +477,7 @@ class TweetScraper:
 async def verify_credentials(auth_token: str, ct0: str) -> dict:
     """
     验证 auth_token 和 ct0 是否有效
+    使用 Twitter GraphQL Viewer 查询获取当前登录用户信息
 
     Returns:
         {"valid": True/False, "message": "...", "screen_name": "..."}
@@ -486,7 +487,11 @@ async def verify_credentials(auth_token: str, ct0: str) -> dict:
         "x-csrf-token": ct0,
         "x-twitter-auth-type": "OAuth2Session",
         "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "zh-cn",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "content-type": "application/json",
+        "accept": "*/*",
+        "referer": "https://x.com/",
     }
     cookies = {
         "auth_token": auth_token,
@@ -500,28 +505,71 @@ async def verify_credentials(auth_token: str, ct0: str) -> dict:
             timeout=15.0,
             follow_redirects=True,
         ) as client:
-            # 用 Viewer 查询验证身份
+            # 使用 GraphQL Viewer 查询验证身份（获取当前登录用户信息）
+            variables = {}
+            features = {
+                "hidden_profile_subscriptions_enabled": True,
+                "rweb_tipjar_consumption_enabled": True,
+                "responsive_web_graphql_exclude_directive_enabled": True,
+                "verified_phone_label_enabled": False,
+                "subscriptions_verification_info_is_identity_verified_enabled": True,
+                "subscriptions_verification_info_verified_since_enabled": True,
+                "highlights_tweets_tab_ui_enabled": True,
+                "responsive_web_twitter_article_notes_tab_enabled": True,
+                "subscriptions_feature_can_gift_premium": True,
+                "creator_subscriptions_tweet_preview_api_enabled": True,
+                "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+                "responsive_web_graphql_timeline_navigation_enabled": True,
+            }
+
+            params = {
+                "variables": json.dumps(variables, separators=(',', ':')),
+                "features": json.dumps(features, separators=(',', ':')),
+            }
+
+            # Viewer 查询端点
             resp = await client.get(
-                "https://x.com/i/api/1.1/account/verify_credentials.json",
-                params={"skip_status": "true"},
+                f"{GRAPHQL_BASE}/LimHVMF2eqg_dgGVO5JQDA/Viewer",
+                params=params,
             )
 
             if resp.status_code == 200:
                 data = resp.json()
-                screen_name = data.get("screen_name", "未知")
-                return {
-                    "valid": True,
-                    "message": f"验证成功，当前登录账号: @{screen_name}",
-                    "screen_name": screen_name,
-                }
+                try:
+                    viewer = data["data"]["viewer"]
+                    user_results = viewer.get("user_results", {})
+                    result = user_results.get("result", {})
+                    legacy = result.get("legacy", {})
+                    screen_name = legacy.get("screen_name", "")
+
+                    if screen_name:
+                        return {
+                            "valid": True,
+                            "message": f"验证成功，当前登录账号: @{screen_name}",
+                            "screen_name": screen_name,
+                        }
+                    else:
+                        # viewer 存在但没有 user_results，可能是受限账号
+                        return {
+                            "valid": True,
+                            "message": "验证成功（账号信息受限，但凭证有效）",
+                            "screen_name": "unknown",
+                        }
+                except (KeyError, TypeError):
+                    # 如果解析失败但 200，说明凭证有效只是返回格式变了
+                    return {
+                        "valid": True,
+                        "message": "验证成功（凭证有效）",
+                        "screen_name": "unknown",
+                    }
             elif resp.status_code == 401:
                 return {"valid": False, "message": "auth_token 或 ct0 无效/已过期"}
             elif resp.status_code == 403:
-                return {"valid": False, "message": "访问被拒绝，ct0 可能不匹配"}
+                return {"valid": False, "message": "访问被拒绝，ct0 可能不匹配或已过期"}
             else:
                 return {"valid": False, "message": f"验证失败（HTTP {resp.status_code}）"}
     except httpx.TimeoutException:
-        return {"valid": False, "message": "连接超时，请检查网络"}
+        return {"valid": False, "message": "连接超时，请检查网络（需要能访问 x.com）"}
     except Exception as e:
         return {"valid": False, "message": f"验证出错: {e}"}
 
