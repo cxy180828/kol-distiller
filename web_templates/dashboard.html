@@ -69,6 +69,63 @@
     {% endif %}
 </div>
 
+<!-- 队列管理 -->
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header" style="display:flex; align-items:center; justify-content:space-between;">
+        <h2>KOL 队列 <span class="badge {{ 'badge-success' if queue_running else 'badge-warning' }}">{{ '运行中' if queue_running else '已停止' }}</span></h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <span style="font-size:11px; color:var(--text-dim);">间隔 {{ queue_interval // 60 }}分钟 · {{ account_count }} 个小号</span>
+            <button class="btn btn-outline btn-sm" onclick="showQueueModal()">+ 批量添加</button>
+            {% if queue_running %}
+            <button class="btn btn-danger btn-sm" onclick="queueAction('stop')">暂停</button>
+            {% else %}
+            <button class="btn btn-success btn-sm" onclick="queueAction('start')">启动</button>
+            {% endif %}
+        </div>
+    </div>
+    {% if queue_items %}
+    <div style="max-height:250px; overflow-y:auto;">
+        {% for item in queue_items %}
+        <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); font-size:13px;">
+            <span style="font-weight:600;">@{{ item.handle }}</span>
+            {% if item.status == 'pending' %}
+            <span class="badge badge-warning">等待中</span>
+            {% elif item.status == 'processing' %}
+            <span class="badge badge-info">处理中</span>
+            {% elif item.status == 'completed' %}
+            <span class="badge badge-success">完成</span>
+            {% elif item.status == 'failed' %}
+            <span class="badge badge-danger">失败</span>
+            {% endif %}
+            {% if item.retries > 0 %}
+            <span style="font-size:11px; color:var(--orange);">重试{{ item.retries }}次</span>
+            {% endif %}
+            {% if item.error %}
+            <span style="font-size:11px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ item.error }}">{{ item.error[:50] }}</span>
+            {% endif %}
+            <span style="margin-left:auto;"></span>
+            {% if item.status in ['pending', 'failed'] %}
+            <button class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:11px;" onclick="queueRemove('{{ item.handle }}')">移除</button>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    <div style="display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border);">
+        <button class="btn btn-outline btn-sm" onclick="queueAction('clear')">清除已完成</button>
+        <button class="btn btn-outline btn-sm" onclick="showIntervalModal()">设置间隔</button>
+        <button class="btn btn-outline btn-sm" onclick="showAccountModal()">管理小号</button>
+    </div>
+    {% else %}
+    <p style="color:var(--text-dim); text-align:center; padding:20px;">
+        队列为空，点击「批量添加」放入KOL<br>
+        <span style="font-size:12px;">队列会自动按间隔逐个处理，遇限流自动等待重试</span>
+    </p>
+    <div style="display:flex; gap:8px; padding:0 12px 12px; justify-content:center;">
+        <button class="btn btn-outline btn-sm" onclick="showAccountModal()">管理小号</button>
+    </div>
+    {% endif %}
+</div>
+
 <!-- KOL 列表 -->
 <div class="card">
     <div class="card-header"><h2>KOL 列表</h2></div>
@@ -141,6 +198,62 @@
             <div style="display:flex; gap:10px; justify-content:flex-end;">
                 <button type="button" class="btn btn-outline" onclick="hideTipModal()">取消</button>
                 <button type="submit" class="btn btn-primary">添加</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 队列批量添加弹窗 -->
+<div id="queueModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:300; align-items:center; justify-content:center;">
+    <div class="card" style="width:450px;">
+        <div class="card-header"><h2>批量添加 KOL 到队列</h2></div>
+        <form id="queueForm" onsubmit="submitQueue(event)">
+            <div class="form-group">
+                <label>KOL Handles（每行一个，或用逗号/空格分隔）</label>
+                <textarea name="handles" class="form-input" rows="6" placeholder="@CryptoCaligh&#10;@Michael_Liu93&#10;@某KOL" required></textarea>
+            </div>
+            <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">队列启动后会自动按间隔逐个抓取+分类+蒸馏，遇到限流自动等待重试。</p>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="hideQueueModal()">取消</button>
+                <button type="submit" class="btn btn-primary">添加到队列</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 设置间隔弹窗 -->
+<div id="intervalModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:300; align-items:center; justify-content:center;">
+    <div class="card" style="width:360px;">
+        <div class="card-header"><h2>设置队列间隔</h2></div>
+        <form id="intervalForm" onsubmit="submitInterval(event)">
+            <div class="form-group">
+                <label>每个KOL之间的等待时间（分钟）</label>
+                <input type="number" name="minutes" class="form-input" value="{{ queue_interval // 60 }}" min="1" required>
+            </div>
+            <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">建议5-10分钟，太短容易触发限流。</p>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="hideIntervalModal()">取消</button>
+                <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 管理小号弹窗 -->
+<div id="accountModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:300; align-items:center; justify-content:center;">
+    <div class="card" style="width:500px;">
+        <div class="card-header"><h2>Twitter 小号管理</h2></div>
+        <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">配置多个Twitter账号，队列处理时自动轮换使用，分散限流压力。</p>
+        <div id="accountList" style="margin-bottom:12px;"></div>
+        <form id="accountForm" onsubmit="submitAccount(event)">
+            <div style="display:grid; grid-template-columns:1fr 2fr 2fr; gap:8px; margin-bottom:12px;">
+                <input type="text" name="name" class="form-input" placeholder="备注名" style="font-size:12px;">
+                <input type="text" name="auth_token" class="form-input" placeholder="auth_token" required style="font-size:12px;">
+                <input type="text" name="ct0" class="form-input" placeholder="ct0" required style="font-size:12px;">
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="hideAccountModal()">关闭</button>
+                <button type="submit" class="btn btn-primary">添加小号</button>
             </div>
         </form>
     </div>
@@ -229,6 +342,110 @@ async function clearAllTips() {
     const resp = await apiPost('/api/tips/clear', form);
     showToast(resp.message || '已清除', 'success');
     setTimeout(() => location.reload(), 500);
+}
+
+// === 队列管理 ===
+function showQueueModal() {
+    document.getElementById('queueModal').style.display = 'flex';
+}
+function hideQueueModal() {
+    document.getElementById('queueModal').style.display = 'none';
+}
+
+async function submitQueue(e) {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    hideQueueModal();
+    const resp = await apiPost('/api/queue/add', form);
+    if (resp.added) {
+        showToast(resp.message, 'success');
+        setTimeout(() => location.reload(), 800);
+    } else {
+        showToast(resp.error || '添加失败', 'error');
+    }
+}
+
+async function queueAction(action) {
+    const form = new FormData();
+    const resp = await apiPost(`/api/queue/${action}`, form);
+    showToast(resp.message || '操作完成', 'success');
+    setTimeout(() => location.reload(), 500);
+}
+
+async function queueRemove(handle) {
+    const form = new FormData();
+    form.append('handle', handle);
+    const resp = await apiPost('/api/queue/remove', form);
+    showToast(resp.message || '已移除', 'success');
+    setTimeout(() => location.reload(), 500);
+}
+
+function showIntervalModal() {
+    document.getElementById('intervalModal').style.display = 'flex';
+}
+function hideIntervalModal() {
+    document.getElementById('intervalModal').style.display = 'none';
+}
+
+async function submitInterval(e) {
+    e.preventDefault();
+    const minutes = e.target.minutes.value;
+    const form = new FormData();
+    form.append('seconds', minutes * 60);
+    hideIntervalModal();
+    const resp = await apiPost('/api/queue/interval', form);
+    showToast(resp.message, 'success');
+    setTimeout(() => location.reload(), 500);
+}
+
+// === 多账号管理 ===
+function showAccountModal() {
+    document.getElementById('accountModal').style.display = 'flex';
+    loadAccounts();
+}
+function hideAccountModal() {
+    document.getElementById('accountModal').style.display = 'none';
+}
+
+async function loadAccounts() {
+    const resp = await fetch('/api/accounts');
+    const data = await resp.json();
+    const list = document.getElementById('accountList');
+    if (!data.accounts || data.accounts.length === 0) {
+        list.innerHTML = '<p style="color:var(--text-dim); font-size:12px; text-align:center;">暂无小号，请在下方添加</p>';
+        return;
+    }
+    let html = '';
+    data.accounts.forEach((acc, i) => {
+        html += `<div style="display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg-input); border-radius:var(--radius); margin-bottom:4px; font-size:12px;">
+            <strong>${acc.name || '小号' + (i+1)}</strong>
+            <span style="color:var(--text-dim);">${acc.auth_token_prefix}</span>
+            <button class="btn btn-danger btn-sm" style="margin-left:auto; padding:2px 6px; font-size:11px;" onclick="removeAccount(${i})">移除</button>
+        </div>`;
+    });
+    list.innerHTML = html;
+}
+
+async function submitAccount(e) {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    const resp = await apiPost('/api/accounts/add', form);
+    if (resp.count !== undefined) {
+        showToast(resp.message, 'success');
+        e.target.reset();
+        loadAccounts();
+    } else {
+        showToast(resp.error || '添加失败', 'error');
+    }
+}
+
+async function removeAccount(index) {
+    if (!confirm('确定移除该小号？')) return;
+    const form = new FormData();
+    form.append('index', index);
+    const resp = await apiPost('/api/accounts/remove', form);
+    showToast(resp.message || '已移除', 'success');
+    loadAccounts();
 }
 </script>
 {% endblock %}

@@ -62,11 +62,95 @@ def _load_twitter_credentials() -> tuple[str, str]:
     return "", ""
 
 
+class AccountPool:
+    """Twitter 多账号池，支持轮换使用，避免单号限流"""
+
+    def __init__(self):
+        self.accounts_path = ROOT_DIR / "twitter_accounts.json"
+        self._index = 0
+
+    def _load_accounts(self) -> list[dict]:
+        """加载账号列表"""
+        if not self.accounts_path.exists():
+            return []
+        try:
+            with open(self.accounts_path, "r", encoding="utf-8") as f:
+                accounts = json.load(f)
+            return [a for a in accounts if a.get("auth_token") and a.get("ct0")]
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def get_next_credentials(self) -> tuple[str, str]:
+        """
+        获取下一个可用账号的凭证（轮换）。
+        如果没有配置多账号，回退到主账号。
+        """
+        accounts = self._load_accounts()
+        if not accounts:
+            # 回退到主账号
+            return _load_twitter_credentials()
+
+        # 轮换
+        if self._index >= len(accounts):
+            self._index = 0
+        account = accounts[self._index]
+        self._index += 1
+        return account["auth_token"], account["ct0"]
+
+    def get_all_accounts(self) -> list[dict]:
+        """获取所有账号（隐藏敏感信息）"""
+        accounts = self._load_accounts()
+        result = []
+        for a in accounts:
+            result.append({
+                "name": a.get("name", ""),
+                "auth_token_prefix": a.get("auth_token", "")[:8] + "...",
+                "added_at": a.get("added_at", ""),
+            })
+        return result
+
+    def add_account(self, name: str, auth_token: str, ct0: str) -> bool:
+        """添加一个账号"""
+        accounts = self._load_accounts() if self.accounts_path.exists() else []
+        # 检查重复
+        for a in accounts:
+            if a.get("auth_token") == auth_token:
+                return False
+        accounts.append({
+            "name": name,
+            "auth_token": auth_token,
+            "ct0": ct0,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+        })
+        with open(self.accounts_path, "w", encoding="utf-8") as f:
+            json.dump(accounts, f, ensure_ascii=False, indent=2)
+        return True
+
+    def remove_account(self, index: int) -> bool:
+        """按索引移除账号"""
+        accounts = self._load_accounts() if self.accounts_path.exists() else []
+        if 0 <= index < len(accounts):
+            accounts.pop(index)
+            with open(self.accounts_path, "w", encoding="utf-8") as f:
+                json.dump(accounts, f, ensure_ascii=False, indent=2)
+            return True
+        return False
+
+    @property
+    def count(self) -> int:
+        return len(self._load_accounts())
+
+
+# 全局账号池实例
+account_pool = AccountPool()
+
+
 class TweetScraper:
     """推文抓取器 - 使用 httpx 直接请求 Twitter GraphQL API"""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, use_pool: bool = False):
         self.config = config
+        self.use_pool = use_pool  # 是否使用多账号池轮换
         self._client: Optional[httpx.AsyncClient] = None
         self._auth_token: str = ""
         self._ct0: str = ""
@@ -76,8 +160,11 @@ class TweetScraper:
         if self._client is not None:
             return
 
-        # 加载凭证
-        auth_token, ct0 = _load_twitter_credentials()
+        # 加载凭证：优先使用多账号池轮换
+        if self.use_pool and account_pool.count > 0:
+            auth_token, ct0 = account_pool.get_next_credentials()
+        else:
+            auth_token, ct0 = _load_twitter_credentials()
 
         # 如果凭证文件没有，从 config 读取
         if not auth_token or not ct0:
