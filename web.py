@@ -953,6 +953,55 @@ async def api_clear_tips(request: Request):
     return JSONResponse({"message": "所有提示已清除"})
 
 
+# === 推文分类查看 API ===
+
+@app.get("/api/kol/{handle}/tweets")
+async def api_kol_tweets(
+    request: Request,
+    handle: str,
+    category: str = Query(default="all"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    """获取KOL已分类推文列表，支持按分类筛选和分页"""
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    handle = handle.lstrip("@").strip()
+    if not handle:
+        return JSONResponse({"error": "handle不能为空"}, status_code=400)
+
+    # 加载全部标注推文
+    categories_filter = None if category == "all" else [category]
+    tweets = load_tagged_tweets(handle, categories=categories_filter)
+
+    # 按时间倒序
+    tweets.sort(key=lambda t: t.get("time", "") or t.get("fetched_at", ""), reverse=True)
+
+    total = len(tweets)
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_tweets = tweets[start:end]
+
+    # 精简返回数据
+    result = []
+    for t in page_tweets:
+        result.append({
+            "text": t.get("text", "")[:300],  # 截断过长推文
+            "time": t.get("time", "") or t.get("fetched_at", ""),
+            "category": t.get("category", "noise"),
+            "extracted": t.get("extracted"),
+        })
+
+    return JSONResponse({
+        "tweets": result,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size,
+    })
+
+
 # === 启动 ===
 
 if __name__ == "__main__":

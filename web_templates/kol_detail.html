@@ -66,6 +66,28 @@
 </div>
 {% endif %}
 
+<!-- 推文分类日志 -->
+<div class="card">
+    <div class="card-header" style="display:flex; align-items:center; justify-content:space-between;">
+        <h2>推文分类日志</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <select id="categoryFilter" class="form-input" style="width:auto; padding:5px 10px; font-size:12px;" onchange="loadTweets(1)">
+                <option value="all">全部分类</option>
+                <option value="trade_opinion">交易观点</option>
+                <option value="market_analysis">市场分析</option>
+                <option value="macro">宏观判断</option>
+                <option value="review">复盘</option>
+                <option value="noise">噪音</option>
+            </select>
+            <span id="tweetsCount" style="font-size:12px; color:var(--text-dim);"></span>
+        </div>
+    </div>
+    <div id="tweetsContainer" style="max-height:600px; overflow-y:auto;">
+        <p style="color:var(--text-dim); text-align:center; padding:20px;">加载中...</p>
+    </div>
+    <div id="tweetsPagination" style="display:flex; justify-content:center; gap:8px; padding:12px 0;"></div>
+</div>
+
 <!-- 元数据 -->
 <div class="card">
     <div class="card-header"><h2>元数据</h2></div>
@@ -78,22 +100,123 @@
 
 {% block scripts %}
 <script>
+const KOL_HANDLE = '{{ handle }}';
+
 async function updateKol() {
-    showToast('正在更新 @{{ handle }}...', 'running');
-    const resp = await apiPost('/api/kol/{{ handle }}/update', new FormData());
+    showToast('正在更新 @' + KOL_HANDLE + '...', 'running');
+    const resp = await apiPost('/api/kol/' + KOL_HANDLE + '/update', new FormData());
     if (resp.task_id) pollTask(resp.task_id, () => location.reload());
 }
 
 async function distillKol() {
-    showToast('正在蒸馏 @{{ handle }}...', 'running');
-    const resp = await apiPost('/api/kol/{{ handle }}/distill', new FormData());
+    showToast('正在蒸馏 @' + KOL_HANDLE + '...', 'running');
+    const resp = await apiPost('/api/kol/' + KOL_HANDLE + '/distill', new FormData());
     if (resp.task_id) pollTask(resp.task_id, () => location.reload());
 }
 
 async function deleteKol() {
-    if (!confirm('确定删除 @{{ handle }}？')) return;
-    await apiPost('/api/kol/{{ handle }}/delete', new FormData());
+    if (!confirm('确定删除 @' + KOL_HANDLE + '？')) return;
+    await apiPost('/api/kol/' + KOL_HANDLE + '/delete', new FormData());
     window.location.href = '/';
 }
+
+// === 推文分类日志 ===
+const CATEGORY_LABELS = {
+    'trade_opinion': '交易观点',
+    'market_analysis': '市场分析',
+    'macro': '宏观判断',
+    'review': '复盘',
+    'noise': '噪音',
+};
+const CATEGORY_COLORS = {
+    'trade_opinion': 'var(--green)',
+    'market_analysis': 'var(--blue)',
+    'macro': 'var(--accent)',
+    'review': 'var(--orange)',
+    'noise': 'var(--text-dim)',
+};
+
+async function loadTweets(page) {
+    const category = document.getElementById('categoryFilter').value;
+    const container = document.getElementById('tweetsContainer');
+    const pagination = document.getElementById('tweetsPagination');
+    const countEl = document.getElementById('tweetsCount');
+
+    container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:20px;">加载中...</p>';
+
+    const resp = await fetch(`/api/kol/${KOL_HANDLE}/tweets?category=${category}&page=${page}&page_size=30`);
+    const data = await resp.json();
+
+    if (data.error) {
+        container.innerHTML = `<p style="color:var(--red); text-align:center; padding:20px;">${data.error}</p>`;
+        return;
+    }
+
+    countEl.textContent = `共 ${data.total} 条`;
+
+    if (!data.tweets || data.tweets.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:20px;">暂无推文数据</p>';
+        pagination.innerHTML = '';
+        return;
+    }
+
+    // 渲染推文列表
+    let html = '';
+    for (const tweet of data.tweets) {
+        const catLabel = CATEGORY_LABELS[tweet.category] || tweet.category;
+        const catColor = CATEGORY_COLORS[tweet.category] || 'var(--text-dim)';
+        const timeStr = tweet.time ? tweet.time.substring(0, 16) : '';
+        const text = escapeHtml(tweet.text);
+
+        let extractedHtml = '';
+        if (tweet.extracted) {
+            const ext = tweet.extracted;
+            const parts = [];
+            if (ext.coin) parts.push(`<span style="color:var(--accent);font-weight:600;">${ext.coin}</span>`);
+            if (ext.direction && ext.direction !== 'neutral') {
+                const dirColor = ext.direction === 'long' ? 'var(--green)' : 'var(--red)';
+                const dirLabel = ext.direction === 'long' ? '做多' : '做空';
+                parts.push(`<span style="color:${dirColor};font-weight:600;">${dirLabel}</span>`);
+            }
+            if (ext.key_point) parts.push(`<span>${escapeHtml(ext.key_point)}</span>`);
+            if (parts.length > 0) {
+                extractedHtml = `<div style="margin-top:4px; font-size:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">${parts.join(' · ')}</div>`;
+            }
+        }
+
+        html += `
+        <div style="padding:10px 14px; border-bottom:1px solid var(--border);">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                <span style="font-size:11px; padding:2px 6px; border-radius:4px; background:${catColor}20; color:${catColor}; font-weight:600;">${catLabel}</span>
+                <span style="font-size:11px; color:var(--text-dim);">${timeStr}</span>
+            </div>
+            <div style="font-size:13px; line-height:1.5; color:var(--text); word-break:break-all;">${text}</div>
+            ${extractedHtml}
+        </div>`;
+    }
+    container.innerHTML = html;
+
+    // 渲染分页
+    let pagHtml = '';
+    if (data.total_pages > 1) {
+        if (data.page > 1) {
+            pagHtml += `<button class="btn btn-outline btn-sm" onclick="loadTweets(${data.page - 1})">上一页</button>`;
+        }
+        pagHtml += `<span style="font-size:12px; color:var(--text-dim); padding:5px 8px;">${data.page} / ${data.total_pages}</span>`;
+        if (data.page < data.total_pages) {
+            pagHtml += `<button class="btn btn-outline btn-sm" onclick="loadTweets(${data.page + 1})">下一页</button>`;
+        }
+    }
+    pagination.innerHTML = pagHtml;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 页面加载时自动加载推文
+document.addEventListener('DOMContentLoaded', () => loadTweets(1));
 </script>
 {% endblock %}
