@@ -25,14 +25,19 @@ import httpx
 from .config import AppConfig, get_kol_dir, ROOT_DIR
 
 
+class _CsrfExpiredError(Exception):
+    """内部异常：ct0 过期需要刷新"""
+    pass
+
+
 # Twitter GraphQL API 端点
 GRAPHQL_BASE = "https://x.com/i/api/graphql"
 
 # UserByScreenName 查询端点（用于获取用户ID）
-USER_BY_SCREEN_NAME_URL = f"{GRAPHQL_BASE}/qW5u-DAen47o2oBGIw8Nhg/UserByScreenName"
+USER_BY_SCREEN_NAME_URL = f"{GRAPHQL_BASE}/IGgvgiOx4QZndDHuD3x9TQ/UserByScreenName"
 
 # UserTweets 查询端点（用于获取用户推文）
-USER_TWEETS_URL = f"{GRAPHQL_BASE}/E3opETHurmVJflFsUBVuUQ/UserTweets"
+USER_TWEETS_URL = f"{GRAPHQL_BASE}/36rb3Xj3iJ64Q-9wKDjCcQ/UserTweets"
 
 
 def _load_twitter_credentials() -> tuple[str, str]:
@@ -102,16 +107,15 @@ class TweetScraper:
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-        cookies = {
-            "auth_token": auth_token,
-            "ct0": ct0,
-        }
+        cookies = httpx.Cookies()
+        cookies.set("auth_token", auth_token, domain=".x.com")
+        cookies.set("ct0", ct0, domain=".x.com")
 
         self._client = httpx.AsyncClient(
             headers=headers,
             cookies=cookies,
             timeout=httpx.Timeout(30.0, connect=10.0),
-            follow_redirects=True,
+            follow_redirects=False,
         )
 
     async def _close_client(self):
@@ -119,6 +123,23 @@ class TweetScraper:
         if self._client:
             await self._client.aclose()
             self._client = None
+
+    async def _refresh_ct0_if_needed(self):
+        """如果遇到 csrf 不匹配，从 Twitter 获取新的 ct0"""
+        # 发一个轻量请求，从 set-cookie 获取新 ct0
+        resp = await self._client.get(
+            f"{GRAPHQL_BASE}/_8ClT24oZ8tpylf_OSuNdg/Viewer",
+            params={"variables": "{}", "features": "{}"},
+        )
+        for cookie_header in resp.headers.get_list("set-cookie"):
+            if cookie_header.startswith("ct0="):
+                new_ct0 = cookie_header.split("ct0=")[1].split(";")[0]
+                if new_ct0 and new_ct0 != self._ct0:
+                    self._ct0 = new_ct0
+                    self._client.headers["x-csrf-token"] = new_ct0
+                    self._client.cookies.set("ct0", new_ct0, domain=".x.com")
+                    return True
+        return False
 
     async def _get_user_id(self, handle: str) -> str:
         """通过 screen_name 获取用户的 rest_id"""
@@ -223,7 +244,14 @@ class TweetScraper:
         next_cursor = None
 
         try:
-            timeline = data["data"]["user"]["result"]["timeline_v2"]["timeline"]
+            user_result = data["data"]["user"]["result"]
+            # 兼容 timeline_v2 和 timeline 两种结构
+            if "timeline_v2" in user_result:
+                timeline = user_result["timeline_v2"]["timeline"]
+            elif "timeline" in user_result:
+                timeline = user_result["timeline"]["timeline"]
+            else:
+                return tweets, None
             instructions = timeline["instructions"]
         except (KeyError, TypeError):
             return tweets, None
@@ -351,10 +379,8 @@ class TweetScraper:
                 "请到【设置】页面重新填写有效的 auth_token 和 ct0。"
             )
         elif resp.status_code == 403:
-            raise RuntimeError(
-                "Twitter 访问被拒绝（403）：可能是 ct0 无效或账号被限制。\n"
-                "请到浏览器重新获取 auth_token 和 ct0 后更新。"
-            )
+            # 403 可能是 ct0 过期，调用方会处理重试
+            raise _CsrfExpiredError("ct0 过期需要刷新")
         elif resp.status_code == 429:
             raise RuntimeError(
                 "Twitter 请求过于频繁（429）：已触发限流。\n"
@@ -387,8 +413,12 @@ class TweetScraper:
         handle = handle.lstrip("@")
 
         try:
-            # 获取用户ID
-            user_id = await self._get_user_id(handle)
+            # 获取用户ID（如果403则自动刷新ct0重试）
+            try:
+                user_id = await self._get_user_id(handle)
+            except _CsrfExpiredError:
+                await self._refresh_ct0_if_needed()
+                user_id = await self._get_user_id(handle)
 
             tweets = []
             cursor = None
@@ -396,9 +426,15 @@ class TweetScraper:
             empty_pages = 0  # 连续空页计数
 
             while fetched < count:
-                page_tweets, next_cursor = await self._fetch_user_tweets_page(
-                    user_id, cursor=cursor, count=min(40, count - fetched)
-                )
+                try:
+                    page_tweets, next_cursor = await self._fetch_user_tweets_page(
+                        user_id, cursor=cursor, count=min(40, count - fetched)
+                    )
+                except _CsrfExpiredError:
+                    await self._refresh_ct0_if_needed()
+                    page_tweets, next_cursor = await self._fetch_user_tweets_page(
+                        user_id, cursor=cursor, count=min(40, count - fetched)
+                    )
 
                 if not page_tweets:
                     empty_pages += 1
@@ -434,6 +470,10 @@ class TweetScraper:
 
         except RuntimeError:
             raise
+        except _CsrfExpiredError:
+            raise RuntimeError(
+                "Twitter ct0 刷新后仍然失败，请到【设置】页面重新填写 auth_token 和 ct0。"
+            )
         except Exception as e:
             error_msg = str(e)
             raise RuntimeError(f"抓取 @{handle} 推文失败: {error_msg}")
