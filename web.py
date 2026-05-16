@@ -1384,4 +1384,4 @@ if __name__ == "__main__":
     print(f"   访问: http://{args.host}:{args.port}")
     print(f"   按 Ctrl+C 停止\n")
 
-    uvicorn.run("web:app", host=args.host, port=args.port, log_level="info", workers=2)
+    uvicorn.run("web:app", host=args.host, port=args.port, log_level="info", workers=3)
