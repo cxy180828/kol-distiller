@@ -190,7 +190,7 @@ def load_tagged_tweets(
                 time_str = tweet.get("time", "") or tweet.get("fetched_at", "")
                 if time_str:
                     try:
-                        # twikit返回的时间格式多样，尝试多种解析
+                        # 推文时间格式多样，尝试多种解析
                         if "+" in time_str or time_str.endswith("Z"):
                             t = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
                         else:

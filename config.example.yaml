@@ -14,13 +14,14 @@ llm:
   temperature_discuss: 0.7
 
 twitter:
-  # 方式一（推荐）：用户名密码登录，首次登录后自动保存cookies.json
-  username: "你的X小号用户名"
-  password: "你的X小号密码"
-  email: "你的X小号邮箱"
-  # 方式二（备用）：直接填cookie（不稳定，容易失效）
-  # auth_token: ""
-  # ct0: ""
+  # 浏览器Cookie认证（唯一方式，免费无需API Key）
+  # 获取方式：
+  #   1. 用浏览器登录 x.com（建议用小号）
+  #   2. 按 F12 → Application → Cookies → x.com
+  #   3. 复制 auth_token 和 ct0 的值填到下面
+  # 也可以在 Web 设置页面直接填写（推荐，无需改此文件）
+  auth_token: ""
+  ct0: ""
 
 market_data:
   # 行情数据来源
