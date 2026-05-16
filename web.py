@@ -37,7 +37,7 @@ from src.config import (
     load_config, ensure_dirs, list_kols, get_kol_dir,
     AppConfig, ROOT_DIR, DISCUSSIONS_DIR,
 )
-from src.scraper import TweetScraper, save_tweets, verify_credentials
+from src.scraper import TweetScraper, save_tweets, verify_credentials, account_pool
 from src.classifier import (
     TweetClassifier, save_tagged_tweets,
     load_tagged_tweets, count_recent_trade_tweets,
@@ -192,12 +192,221 @@ class TipsManager:
 tips_manager = TipsManager(ROOT_DIR / "kol_tips.json")
 
 
+# === KOL 队列管理 ===
+
+class KolQueue:
+    """KOL 添加队列：批量添加KOL，自动间隔处理，遇限流自动等待重试"""
+
+    def __init__(self, filepath: Path):
+        self.filepath = filepath
+        self.queue: list[dict] = []  # [{handle, status, retries, added_at, error, ...}]
+        self.running = False
+        self.interval_seconds = 300  # 默认5分钟间隔
+        self.retry_delay_seconds = 600  # 限流后等待10分钟
+        self.max_retries = 5
+        self._task: Optional[asyncio.Task] = None
+        self._load()
+
+    def _load(self):
+        if self.filepath.exists():
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self.queue = data.get("queue", [])
+                    self.running = data.get("running", False)
+                    self.interval_seconds = data.get("interval_seconds", 300)
+                elif isinstance(data, list):
+                    self.queue = data
+            except (json.JSONDecodeError, OSError):
+                self.queue = []
+
+    def _save(self):
+        try:
+            data = {
+                "queue": self.queue,
+                "running": self.running,
+                "interval_seconds": self.interval_seconds,
+            }
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def add(self, handle: str) -> dict | None:
+        """添加KOL到队列"""
+        handle = handle.lstrip("@").strip()
+        # 检查是否已在队列中
+        for item in self.queue:
+            if item["handle"] == handle and item["status"] in ("pending", "processing"):
+                return None  # 已存在
+        item = {
+            "handle": handle,
+            "status": "pending",  # pending / processing / completed / failed
+            "retries": 0,
+            "added_at": datetime.now(UTC8).isoformat(),
+            "started_at": None,
+            "completed_at": None,
+            "error": None,
+        }
+        self.queue.append(item)
+        self._save()
+        return item
+
+    def add_batch(self, handles: list[str]) -> list[str]:
+        """批量添加，返回实际添加的handle列表"""
+        added = []
+        for h in handles:
+            h = h.lstrip("@").strip()
+            if h and self.add(h) is not None:
+                added.append(h)
+        return added
+
+    def remove(self, handle: str) -> bool:
+        """从队列移除"""
+        handle = handle.lstrip("@").strip()
+        original_len = len(self.queue)
+        self.queue = [q for q in self.queue if not (q["handle"] == handle and q["status"] in ("pending", "failed"))]
+        if len(self.queue) < original_len:
+            self._save()
+            return True
+        return False
+
+    def get_queue(self) -> list[dict]:
+        return self.queue
+
+    def get_pending(self) -> list[dict]:
+        return [q for q in self.queue if q["status"] in ("pending", "failed")]
+
+    def clear_completed(self):
+        """清除已完成/已失败的条目"""
+        self.queue = [q for q in self.queue if q["status"] in ("pending", "processing")]
+        self._save()
+
+    def clear_all(self):
+        self.queue = []
+        self._save()
+
+    def set_interval(self, seconds: int):
+        self.interval_seconds = max(60, seconds)  # 最少1分钟
+        self._save()
+
+    def start(self):
+        """启动队列处理"""
+        self.running = True
+        self._save()
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._process_loop())
+
+    def stop(self):
+        """停止队列处理"""
+        self.running = False
+        self._save()
+
+    def ensure_running(self):
+        """确保后台任务在运行（用于app启动时恢复）"""
+        if self.running and (self._task is None or self._task.done()):
+            self._task = asyncio.create_task(self._process_loop())
+
+    async def _process_loop(self):
+        """后台循环：逐个处理队列中的KOL"""
+        while self.running:
+            pending = self.get_pending()
+            if not pending:
+                # 没有待处理的，等待后再检查
+                await asyncio.sleep(30)
+                continue
+
+            item = pending[0]
+            handle = item["handle"]
+            item["status"] = "processing"
+            item["started_at"] = datetime.now(UTC8).isoformat()
+            item["error"] = None
+            self._save()
+
+            try:
+                await self._process_one(handle)
+                item["status"] = "completed"
+                item["completed_at"] = datetime.now(UTC8).isoformat()
+                self._save()
+                tips_manager.add_tip(handle, f"队列自动添加成功")
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "429" in error_str or "限流" in error_str or "rate" in error_str.lower()
+
+                if is_rate_limit and item["retries"] < self.max_retries:
+                    # 限流：标记为pending等待重试
+                    item["status"] = "pending"
+                    item["retries"] += 1
+                    item["error"] = f"限流，第{item['retries']}次重试等待中"
+                    self._save()
+                    tips_manager.add_tip(handle, f"触发限流（429），将在{self.retry_delay_seconds // 60}分钟后自动重试（第{item['retries']}/{self.max_retries}次）")
+                    # 限流等待更长时间
+                    await asyncio.sleep(self.retry_delay_seconds)
+                    continue  # 不等 interval，直接重试
+                else:
+                    item["status"] = "failed"
+                    item["error"] = error_str[:200]
+                    item["completed_at"] = datetime.now(UTC8).isoformat()
+                    self._save()
+                    if is_rate_limit:
+                        tips_manager.add_tip(handle, f"限流重试{self.max_retries}次仍失败，已放弃。建议增大队列间隔。")
+                    else:
+                        tips_manager.add_tip(handle, error_str[:150])
+
+            # 正常间隔等待
+            if self.running:
+                await asyncio.sleep(self.interval_seconds)
+
+    async def _process_one(self, handle: str):
+        """处理单个KOL：抓取+分类+蒸馏（使用多账号池轮换）"""
+        config = load_config()
+        ensure_dirs()
+
+        # 检查是否已存在
+        existing_kols = list_kols()
+        if handle in existing_kols:
+            # 已存在则做增量更新
+            scraper = TweetScraper(config, use_pool=True)
+            tweets = await scraper.fetch_incremental(handle)
+            if tweets:
+                save_tweets(handle, tweets)
+                classifier = TweetClassifier(config)
+                tagged = await classifier.classify_tweets(tweets)
+                save_tagged_tweets(handle, tagged)
+            distiller = ProfileDistiller(config)
+            profile = await distiller.distill(handle)
+            save_profile(handle, profile)
+        else:
+            # 新增
+            scraper = TweetScraper(config, use_pool=True)
+            tweets = await scraper.fetch_initial(handle)
+            if not tweets:
+                raise RuntimeError(f"@{handle} 未获取到推文，请检查handle是否正确")
+            save_tweets(handle, tweets)
+
+            classifier = TweetClassifier(config)
+            tagged = await classifier.classify_tweets(tweets)
+            save_tagged_tweets(handle, tagged)
+
+            distiller = ProfileDistiller(config)
+            profile = await distiller.distill(handle)
+            save_profile(handle, profile)
+
+
+kol_queue = KolQueue(ROOT_DIR / "kol_queue.json")
+
+
 # === App 初始化 ===
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_dirs()
+    # 恢复队列处理（如果之前是运行状态）
+    kol_queue.ensure_running()
     yield
+    # 停止队列
+    kol_queue.running = False
 
 app = FastAPI(title="KOL Distiller", lifespan=lifespan)
 
@@ -314,6 +523,11 @@ async def dashboard(request: Request):
         "notifications": notifications,
         "tips": tips,
         "kol_count": len(kols),
+        "queue_running": kol_queue.running,
+        "queue_pending": len(kol_queue.get_pending()),
+        "queue_items": kol_queue.get_queue()[:10],
+        "queue_interval": kol_queue.interval_seconds,
+        "account_count": account_pool.count,
     })
 
 
@@ -1000,6 +1214,159 @@ async def api_kol_tweets(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size,
     })
+
+
+# === 队列管理 API ===
+
+@app.get("/api/queue")
+async def api_get_queue(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    return JSONResponse({
+        "queue": kol_queue.get_queue(),
+        "running": kol_queue.running,
+        "interval_seconds": kol_queue.interval_seconds,
+        "pending_count": len(kol_queue.get_pending()),
+    })
+
+
+@app.post("/api/queue/add")
+async def api_queue_add(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    handles_raw = form.get("handles", "").strip()
+    if not handles_raw:
+        return JSONResponse({"error": "请输入至少一个KOL handle"}, status_code=400)
+
+    # 支持逗号、换行、空格分隔
+    import re
+    handles = [h.strip().lstrip("@") for h in re.split(r"[,\n\s]+", handles_raw) if h.strip()]
+    if not handles:
+        return JSONResponse({"error": "请输入有效的KOL handle"}, status_code=400)
+
+    added = kol_queue.add_batch(handles)
+    return JSONResponse({
+        "message": f"已添加 {len(added)} 个KOL到队列",
+        "added": added,
+        "skipped": len(handles) - len(added),
+    })
+
+
+@app.post("/api/queue/remove")
+async def api_queue_remove(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    handle = form.get("handle", "").strip().lstrip("@")
+    if not handle:
+        return JSONResponse({"error": "handle不能为空"}, status_code=400)
+
+    if kol_queue.remove(handle):
+        return JSONResponse({"message": f"@{handle} 已从队列移除"})
+    return JSONResponse({"error": "该KOL不在队列中或状态不可移除"}, status_code=400)
+
+
+@app.post("/api/queue/start")
+async def api_queue_start(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    kol_queue.start()
+    return JSONResponse({"message": "队列已启动", "running": True})
+
+
+@app.post("/api/queue/stop")
+async def api_queue_stop(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    kol_queue.stop()
+    return JSONResponse({"message": "队列已停止", "running": False})
+
+
+@app.post("/api/queue/clear")
+async def api_queue_clear(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    kol_queue.clear_completed()
+    return JSONResponse({"message": "已清除完成/失败的条目"})
+
+
+@app.post("/api/queue/interval")
+async def api_queue_interval(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    try:
+        seconds = int(form.get("seconds", 300))
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "间隔必须是整数（秒）"}, status_code=400)
+
+    if seconds < 60:
+        return JSONResponse({"error": "间隔至少60秒"}, status_code=400)
+
+    kol_queue.set_interval(seconds)
+    return JSONResponse({"message": f"队列间隔已设为 {seconds} 秒（{seconds // 60} 分钟）"})
+
+
+# === 多账号管理 API ===
+
+@app.get("/api/accounts")
+async def api_get_accounts(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    return JSONResponse({
+        "accounts": account_pool.get_all_accounts(),
+        "count": account_pool.count,
+    })
+
+
+@app.post("/api/accounts/add")
+async def api_add_account(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    name = form.get("name", "").strip()
+    auth_token = form.get("auth_token", "").strip()
+    ct0 = form.get("ct0", "").strip()
+
+    if not auth_token or not ct0:
+        return JSONResponse({"error": "auth_token 和 ct0 不能为空"}, status_code=400)
+    if len(auth_token) < 20:
+        return JSONResponse({"error": "auth_token 格式不正确"}, status_code=400)
+    if len(ct0) < 20:
+        return JSONResponse({"error": "ct0 格式不正确"}, status_code=400)
+
+    if not name:
+        name = f"账号{account_pool.count + 1}"
+
+    if account_pool.add_account(name, auth_token, ct0):
+        return JSONResponse({"message": f"账号 {name} 已添加", "count": account_pool.count})
+    else:
+        return JSONResponse({"error": "该账号已存在"}, status_code=400)
+
+
+@app.post("/api/accounts/remove")
+async def api_remove_account(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    try:
+        index = int(form.get("index", -1))
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "index 无效"}, status_code=400)
+
+    if account_pool.remove_account(index):
+        return JSONResponse({"message": "账号已移除", "count": account_pool.count})
+    return JSONResponse({"error": "账号不存在"}, status_code=404)
 
 
 # === 启动 ===
