@@ -477,11 +477,36 @@ class TweetScraper:
 async def verify_credentials(auth_token: str, ct0: str) -> dict:
     """
     验证 auth_token 和 ct0 是否有效
-    使用 Twitter GraphQL Viewer 查询获取当前登录用户信息
+    使用 Twitter GraphQL Viewer 查询获取当前登录用户信息。
+    如果 ct0 过期（403），会自动用 Twitter 返回的新 ct0 重试一次。
 
     Returns:
-        {"valid": True/False, "message": "...", "screen_name": "..."}
+        {"valid": True/False, "message": "...", "screen_name": "...", "ct0": "..."}
     """
+
+    async def _do_viewer_request(client, csrf_token):
+        """发送 Viewer 查询"""
+        client.headers["x-csrf-token"] = csrf_token
+        variables = {}
+        features = {
+            "subscriptions_upsells_api_enabled": False,
+            "profile_label_improvements_pcf_label_in_post_enabled": True,
+            "responsive_web_profile_redirect_enabled": False,
+            "rweb_tipjar_consumption_enabled": False,
+            "verified_phone_label_enabled": False,
+            "creator_subscriptions_tweet_preview_api_enabled": True,
+            "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+            "responsive_web_graphql_timeline_navigation_enabled": True,
+        }
+        params = {
+            "variables": json.dumps(variables, separators=(',', ':')),
+            "features": json.dumps(features, separators=(',', ':')),
+        }
+        return await client.get(
+            f"{GRAPHQL_BASE}/_8ClT24oZ8tpylf_OSuNdg/Viewer",
+            params=params,
+        )
+
     headers = {
         "authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
         "x-csrf-token": ct0,
@@ -493,47 +518,41 @@ async def verify_credentials(auth_token: str, ct0: str) -> dict:
         "accept": "*/*",
         "referer": "https://x.com/",
     }
-    cookies = {
-        "auth_token": auth_token,
-        "ct0": ct0,
-    }
+
+    jar = httpx.Cookies()
+    jar.set("auth_token", auth_token, domain=".x.com")
+    jar.set("ct0", ct0, domain=".x.com")
+
+    actual_ct0 = ct0
 
     try:
         async with httpx.AsyncClient(
             headers=headers,
-            cookies=cookies,
+            cookies=jar,
             timeout=15.0,
-            follow_redirects=True,
+            follow_redirects=False,
         ) as client:
-            # 使用 GraphQL Viewer 查询验证身份（获取当前登录用户信息）
-            variables = {}
-            features = {
-                "subscriptions_upsells_api_enabled": False,
-                "profile_label_improvements_pcf_label_in_post_enabled": True,
-                "responsive_web_profile_redirect_enabled": False,
-                "rweb_tipjar_consumption_enabled": False,
-                "verified_phone_label_enabled": False,
-                "creator_subscriptions_tweet_preview_api_enabled": True,
-                "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-                "responsive_web_graphql_timeline_navigation_enabled": True,
-            }
+            resp = await _do_viewer_request(client, ct0)
 
-            params = {
-                "variables": json.dumps(variables, separators=(',', ':')),
-                "features": json.dumps(features, separators=(',', ':')),
-            }
+            # 如果 403 且错误是 csrf 不匹配，尝试从响应的 set-cookie 中获取新 ct0 重试
+            if resp.status_code == 403:
+                new_ct0 = None
+                for cookie_header in resp.headers.get_list("set-cookie"):
+                    if cookie_header.startswith("ct0="):
+                        new_ct0 = cookie_header.split("ct0=")[1].split(";")[0]
+                        break
 
-            # Viewer 查询端点（queryId: _8ClT24oZ8tpylf_OSuNdg）
-            resp = await client.get(
-                f"{GRAPHQL_BASE}/_8ClT24oZ8tpylf_OSuNdg/Viewer",
-                params=params,
-            )
+                if new_ct0 and new_ct0 != ct0:
+                    client.cookies.set("ct0", new_ct0, domain=".x.com")
+                    resp = await _do_viewer_request(client, new_ct0)
+                    actual_ct0 = new_ct0
+                else:
+                    return {"valid": False, "message": "访问被拒绝（403），ct0 无效或账号被限制"}
 
             if resp.status_code == 200:
                 data = resp.json()
 
-                # 检查 errors 字段 —— Twitter 即使凭证无效也可能返回 200，
-                # 但会在 errors 里带 AuthenticationError (code 215)
+                # 检查 errors 字段
                 errors = data.get("errors", [])
                 for err in errors:
                     err_name = err.get("name", "")
@@ -545,24 +564,39 @@ async def verify_credentials(auth_token: str, ct0: str) -> dict:
                     viewer = data["data"]["viewer"]
                     user_results = viewer.get("user_results", {})
                     result = user_results.get("result", {})
-                    legacy = result.get("legacy", {})
-                    screen_name = legacy.get("screen_name", "")
+
+                    # screen_name 可能在 core 或 legacy 中
+                    screen_name = ""
+                    core = result.get("core", {})
+                    if isinstance(core, dict):
+                        screen_name = core.get("screen_name", "")
+                    if not screen_name:
+                        legacy = result.get("legacy", {})
+                        if isinstance(legacy, dict):
+                            screen_name = legacy.get("screen_name", "")
 
                     if screen_name:
                         return {
                             "valid": True,
                             "message": f"验证成功，当前登录账号: @{screen_name}",
                             "screen_name": screen_name,
+                            "ct0": actual_ct0,
                         }
                     else:
-                        # viewer 有数据但没有 screen_name，凭证无效
+                        if user_results:
+                            return {
+                                "valid": True,
+                                "message": "验证成功（凭证有效）",
+                                "screen_name": "unknown",
+                                "ct0": actual_ct0,
+                            }
                         return {"valid": False, "message": "auth_token 或 ct0 无效（未获取到用户信息）"}
                 except (KeyError, TypeError):
                     return {"valid": False, "message": "auth_token 或 ct0 无效（响应数据异常）"}
             elif resp.status_code == 401:
                 return {"valid": False, "message": "auth_token 或 ct0 无效/已过期"}
             elif resp.status_code == 403:
-                return {"valid": False, "message": "访问被拒绝，ct0 可能不匹配或已过期"}
+                return {"valid": False, "message": "访问被拒绝，ct0 不匹配或已过期，请从浏览器重新复制"}
             else:
                 return {"valid": False, "message": f"验证失败（HTTP {resp.status_code}）"}
     except httpx.TimeoutException:
