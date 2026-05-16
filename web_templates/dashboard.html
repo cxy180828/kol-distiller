@@ -39,6 +39,36 @@
 </div>
 {% endif %}
 
+<!-- KOL 提示 -->
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header" style="display:flex; align-items:center; justify-content:space-between;">
+        <h2>KOL 提示</h2>
+        <div style="display:flex; gap:8px;">
+            <button class="btn btn-outline btn-sm" onclick="showTipModal()">+ 添加提示</button>
+            {% if tips %}
+            <button class="btn btn-danger btn-sm" onclick="clearAllTips()">清除全部</button>
+            {% endif %}
+        </div>
+    </div>
+    {% if tips %}
+    <div style="max-height:300px; overflow-y:auto;">
+        {% for tip in tips %}
+        <div class="notification notification-warning" style="display:flex; align-items:flex-start; gap:8px;">
+            <div style="flex:1;">
+                <strong>@{{ tip.handle }}</strong>: {{ tip.message }}
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+                <span style="font-size:11px; color:var(--text-dim);">{{ tip.time }}</span>
+                <button class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:11px;" onclick="deleteTip('{{ tip.id }}')">×</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--text-dim); text-align:center; padding:20px;">暂无提示</p>
+    {% endif %}
+</div>
+
 <!-- KOL 列表 -->
 <div class="card">
     <div class="card-header"><h2>KOL 列表</h2></div>
@@ -91,6 +121,31 @@
     </div>
 </div>
 
+<!-- 添加提示弹窗 -->
+<div id="tipModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:300; align-items:center; justify-content:center;">
+    <div class="card" style="width:450px;">
+        <div class="card-header"><h2>添加 KOL 提示</h2></div>
+        <form id="tipForm" onsubmit="submitTip(event)">
+            <div class="form-group">
+                <label>KOL Handle</label>
+                <input type="text" name="handle" class="form-input" placeholder="@CryptoCaligh" required>
+            </div>
+            <div class="form-group">
+                <label>提示信息</label>
+                <textarea name="message" class="form-input" rows="3" placeholder="例如：Twitter 请求过于频繁（429）..." required></textarea>
+            </div>
+            <div class="form-group">
+                <label>时间（可选，默认当前时间）</label>
+                <input type="text" name="time" class="form-input" placeholder="2026-05-16T08:32">
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="hideTipModal()">取消</button>
+                <button type="submit" class="btn btn-primary">添加</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -136,6 +191,44 @@ async function deleteKol(handle) {
     const resp = await apiPost(`/api/kol/${handle}/delete`, form);
     showToast(resp.message, 'success');
     setTimeout(() => location.reload(), 1000);
+}
+
+// === 提示管理 ===
+function showTipModal() {
+    document.getElementById('tipModal').style.display = 'flex';
+}
+function hideTipModal() {
+    document.getElementById('tipModal').style.display = 'none';
+}
+
+async function submitTip(e) {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    hideTipModal();
+    const resp = await apiPost('/api/tips/add', form);
+    if (resp.tip) {
+        showToast('提示已添加', 'success');
+        setTimeout(() => location.reload(), 800);
+    } else {
+        showToast(resp.error || '添加失败', 'error');
+    }
+}
+
+async function deleteTip(tipId) {
+    const form = new FormData();
+    const resp = await apiPost(`/api/tips/${tipId}/delete`, form);
+    if (resp.message) {
+        showToast('提示已删除', 'success');
+        setTimeout(() => location.reload(), 500);
+    }
+}
+
+async function clearAllTips() {
+    if (!confirm('确定清除所有KOL提示？')) return;
+    const form = new FormData();
+    const resp = await apiPost('/api/tips/clear', form);
+    showToast(resp.message || '已清除', 'success');
+    setTimeout(() => location.reload(), 500);
 }
 </script>
 {% endblock %}

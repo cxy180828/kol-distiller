@@ -12,10 +12,13 @@ import json
 import asyncio
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
+
+# UTC+8 时区
+UTC8 = timezone(timedelta(hours=8))
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -82,7 +85,7 @@ class TaskManager:
             "progress": "",
             "result": None,
             "error": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC8).isoformat(),
             "completed_at": None,
         }
         return task_id
@@ -95,13 +98,13 @@ class TaskManager:
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "completed"
             self.tasks[task_id]["result"] = result
-            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            self.tasks[task_id]["completed_at"] = datetime.now(UTC8).isoformat()
 
     def fail_task(self, task_id: str, error: str):
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "failed"
             self.tasks[task_id]["error"] = error
-            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            self.tasks[task_id]["completed_at"] = datetime.now(UTC8).isoformat()
 
     def get_task(self, task_id: str) -> Optional[dict]:
         return self.tasks.get(task_id)
@@ -123,6 +126,70 @@ class TaskManager:
 
 
 task_manager = TaskManager()
+
+
+# === KOL 提示管理 ===
+
+class TipsManager:
+    """管理KOL提示信息（如限流、无有效推文等），持久化到文件"""
+
+    MAX_TIPS = 100
+
+    def __init__(self, filepath: Path):
+        self.filepath = filepath
+        self.tips: list[dict] = []
+        self._load()
+
+    def _load(self):
+        if self.filepath.exists():
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    self.tips = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                self.tips = []
+
+    def _save(self):
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(self.tips, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def add_tip(self, handle: str, message: str, tip_time: str = None):
+        """添加一条KOL提示"""
+        if not tip_time:
+            tip_time = datetime.now(UTC8).strftime("%Y-%m-%dT%H:%M")
+        tip = {
+            "id": secrets.token_hex(6),
+            "handle": handle,
+            "message": message,
+            "time": tip_time,
+            "created_at": datetime.now(UTC8).isoformat(),
+        }
+        self.tips.insert(0, tip)
+        # 限制数量
+        if len(self.tips) > self.MAX_TIPS:
+            self.tips = self.tips[:self.MAX_TIPS]
+        self._save()
+        return tip
+
+    def get_tips(self, limit: int = 20) -> list[dict]:
+        return self.tips[:limit]
+
+    def delete_tip(self, tip_id: str) -> bool:
+        original_len = len(self.tips)
+        self.tips = [t for t in self.tips if t["id"] != tip_id]
+        if len(self.tips) < original_len:
+            self._save()
+            return True
+        return False
+
+    def clear_tips(self):
+        self.tips = []
+        self._save()
+
+
+tips_manager = TipsManager(ROOT_DIR / "kol_tips.json")
 
 
 # === App 初始化 ===
@@ -240,10 +307,12 @@ async def dashboard(request: Request):
         })
 
     notifications = task_manager.get_notifications()[:5]
+    tips = tips_manager.get_tips(10)
 
     return render(request, "dashboard.html", {
         "kols": kol_data,
         "notifications": notifications,
+        "tips": tips,
         "kol_count": len(kols),
     })
 
@@ -441,7 +510,9 @@ async def api_add_kol(request: Request, handle: str = Form(...)):
             scraper = TweetScraper(config)
             tweets = await scraper.fetch_initial(handle)
             if not tweets:
-                task_manager.fail_task(task_id, "未获取到推文，请检查handle")
+                err_msg = "未获取到推文，请检查handle"
+                task_manager.fail_task(task_id, err_msg)
+                tips_manager.add_tip(handle, err_msg)
                 return
 
             save_tweets(handle, tweets)
@@ -460,7 +531,15 @@ async def api_add_kol(request: Request, handle: str = Form(...)):
 
             task_manager.complete_task(task_id, f"@{handle} 添加成功（{len(tweets)}条推文）")
         except Exception as e:
-            task_manager.fail_task(task_id, str(e))
+            error_str = str(e)
+            task_manager.fail_task(task_id, error_str)
+            # 自动生成提示
+            if "429" in error_str or "限流" in error_str or "rate" in error_str.lower():
+                tips_manager.add_tip(handle, f"Twitter 请求过于频繁（429）：已触发限流。请稍等 5-10 分钟后重试。如频繁出现，可适当增大抓取间隔。")
+            elif "噪音" in error_str or "没有有效" in error_str:
+                tips_manager.add_tip(handle, f"@{handle} 没有有效的交易相关推文（全部被归类为噪音）。可能原因：该KOL近30天没发过交易相关内容，或推文数量太少。建议：增大distill.lookback_days或distill.initial_fetch_count后重试。")
+            else:
+                tips_manager.add_tip(handle, error_str)
 
     asyncio.create_task(run_add())
     return JSONResponse({"task_id": task_id, "message": f"正在后台添加 @{handle}"})
@@ -499,7 +578,14 @@ async def api_update_kol(request: Request, handle: str):
                 msg += f"（新增{len(tweets)}条推文）"
             task_manager.complete_task(task_id, msg)
         except Exception as e:
-            task_manager.fail_task(task_id, str(e))
+            error_str = str(e)
+            task_manager.fail_task(task_id, error_str)
+            if "429" in error_str or "限流" in error_str or "rate" in error_str.lower():
+                tips_manager.add_tip(handle, f"Twitter 请求过于频繁（429）：已触发限流。请稍等 5-10 分钟后重试。如频繁出现，可适当增大抓取间隔。")
+            elif "噪音" in error_str or "没有有效" in error_str:
+                tips_manager.add_tip(handle, f"@{handle} 没有有效的交易相关推文（全部被归类为噪音）。可能原因：该KOL近30天没发过交易相关内容，或推文数量太少。建议：增大distill.lookback_days或distill.initial_fetch_count后重试。")
+            else:
+                tips_manager.add_tip(handle, error_str)
 
     asyncio.create_task(run_update())
     return JSONResponse({"task_id": task_id})
@@ -643,7 +729,7 @@ async def api_twitter_save_credentials(request: Request):
         "auth_token": auth_token,
         "ct0": actual_ct0,
         "screen_name": result.get("screen_name", ""),
-        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "saved_at": datetime.now(UTC8).isoformat(),
     }
 
     try:
@@ -818,6 +904,53 @@ async def api_save_settings(request: Request):
         return JSONResponse({"error": f"配置写入失败: {e}，已恢复旧配置"}, status_code=500)
 
     return JSONResponse({"message": "配置已保存"})
+
+
+# === KOL 提示 API ===
+
+@app.get("/api/tips")
+async def api_get_tips(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    return JSONResponse(tips_manager.get_tips(20))
+
+
+@app.post("/api/tips/add")
+async def api_add_tip(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    form = await request.form()
+    handle = form.get("handle", "").strip().lstrip("@")
+    message = form.get("message", "").strip()
+    tip_time = form.get("time", "").strip()
+
+    if not handle:
+        return JSONResponse({"error": "handle不能为空"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "提示信息不能为空"}, status_code=400)
+
+    tip = tips_manager.add_tip(handle, message, tip_time or None)
+    return JSONResponse({"message": "提示已添加", "tip": tip})
+
+
+@app.post("/api/tips/{tip_id}/delete")
+async def api_delete_tip(request: Request, tip_id: str):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    if tips_manager.delete_tip(tip_id):
+        return JSONResponse({"message": "提示已删除"})
+    return JSONResponse({"error": "提示不存在"}, status_code=404)
+
+
+@app.post("/api/tips/clear")
+async def api_clear_tips(request: Request):
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    tips_manager.clear_tips()
+    return JSONResponse({"message": "所有提示已清除"})
 
 
 # === 启动 ===

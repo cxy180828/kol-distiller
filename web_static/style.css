@@ -213,6 +213,7 @@ a:hover { color: var(--accent-hover); }
 
 .notification-success { background: rgba(0,184,148,0.1); border-left: 3px solid var(--green); }
 .notification-error { background: rgba(231,76,60,0.1); border-left: 3px solid var(--red); }
+.notification-warning { background: rgba(243,156,18,0.1); border-left: 3px solid var(--orange); }
 .notification-running { background: rgba(108,92,231,0.1); border-left: 3px solid var(--accent); }
 
 /* Profile/Markdown display */
