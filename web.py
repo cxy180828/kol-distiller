@@ -636,11 +636,12 @@ async def api_twitter_save_credentials(request: Request):
             "error": f"凭证验证失败: {result['message']}\n请确认从浏览器复制的值是否正确。"
         }, status_code=400)
 
-    # 验证通过，保存到文件
+    # 验证通过，保存到文件（使用可能刷新过的ct0）
+    actual_ct0 = result.get("ct0", ct0)
     creds_path = ROOT_DIR / "twitter_credentials.json"
     creds_data = {
         "auth_token": auth_token,
-        "ct0": ct0,
+        "ct0": actual_ct0,
         "screen_name": result.get("screen_name", ""),
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
