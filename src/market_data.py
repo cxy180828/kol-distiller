@@ -5,7 +5,10 @@
 """
 
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# 北京时间 UTC+8
+CN_TZ = timezone(timedelta(hours=8))
 from typing import Optional
 
 from .config import MarketDataConfig
@@ -195,7 +198,7 @@ class MarketDataClient:
         # 成交量（亿USDT）
         vol_display = volume_usdt / 1e8
 
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        now_str = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M (北京时间)")
 
         context = f"""## {coin} 实时市场数据
 *更新时间: {now_str}*

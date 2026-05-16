@@ -8,7 +8,10 @@
 
 import json
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# 北京时间 UTC+8
+CN_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
 from typing import Optional
 
@@ -206,7 +209,7 @@ class TweetScraper:
                 "retweets": getattr(tweet, 'retweet_count', 0) or 0,
                 "replies": getattr(tweet, 'reply_count', 0) or 0,
             },
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     async def fetch_initial(self, handle: str) -> list[dict]:
@@ -287,7 +290,7 @@ def save_tweets(handle: str, tweets: list[dict]):
     # 最新推文ID（tweets已经是倒序的，第一条最新）
     meta["handle"] = handle
     meta["latest_tweet_id"] = tweets[0]["id"]
-    meta["last_fetch_time"] = datetime.now(timezone.utc).isoformat()
+    meta["last_fetch_time"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
     meta["total_tweets"] = meta.get("total_tweets", 0) + len(new_tweets)
 
     with open(meta_path, "w", encoding="utf-8") as f:
