@@ -8,6 +8,10 @@ llm:
   api_key: "sk-xxxxx"
   # 模型名称（你中转站里的模型名）
   model: "gpt-4o"
+  # 预筛模型（可选，便宜模型用于粗筛噪音推文，大幅减少主模型调用量）
+  # 留空则不启用预筛，所有推文直接走主模型分类
+  # 推荐：gpt-4o-mini、deepseek-chat 等低成本模型
+  pre_filter_model: "gpt-4o-mini"
   # 温度（分类用低温度，讨论用稍高）
   temperature_classify: 0.1
   temperature_distill: 0.3

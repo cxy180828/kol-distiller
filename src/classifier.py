@@ -1,6 +1,10 @@
 """推文分类模块
 
-对原始推文进行批量分类标注：
+两级AI分类架构：
+  第一级（粗筛）：用便宜模型快速判断推文是否与加密货币交易/市场相关
+  第二级（精分类）：只对相关推文做详细分类和信息提取
+
+分类类别：
 - trade_opinion: 交易观点（喊单、仓位操作）
 - market_analysis: 市场分析（技术面、链上数据解读）
 - macro: 宏观判断（美联储、监管、行业趋势）
@@ -16,6 +20,22 @@ from typing import Optional
 from .config import AppConfig, get_kol_dir
 from .llm_client import LLMClient
 
+
+# === 第一级：粗筛 Prompt ===
+
+PRE_FILTER_SYSTEM_PROMPT = """你是一个加密货币内容筛选器。判断每条推文是否与加密货币交易、市场分析、行情判断相关。
+
+规则：
+- Y = 与加密货币交易/市场/行情/仓位/技术分析相关（哪怕只是提到币种价格走势）
+- N = 完全无关（闲聊、日常生活、广告、抽奖、纯表情、纯转发无内容）
+
+只输出一个JSON数组，元素为 "Y" 或 "N"，顺序对应输入推文顺序。
+例如输入3条推文：["Y", "N", "Y"]
+
+注意：宁可多放过（标Y），也不要误杀。有任何加密/金融相关内容就标Y。"""
+
+
+# === 第二级：精分类 Prompt ===
 
 CLASSIFY_SYSTEM_PROMPT = """你是一个加密货币推文分类助手。你的任务是对KOL的推文进行分类和关键信息提取。
 
@@ -58,16 +78,25 @@ CLASSIFY_SYSTEM_PROMPT = """你是一个加密货币推文分类助手。你的�
 
 
 class TweetClassifier:
-    """推文批量分类器"""
+    """推文两级分类器：粗筛 + 精分类"""
 
     def __init__(self, config: AppConfig):
         self.config = config
         self.llm = LLMClient(config.llm)
         self.batch_size = config.distill.batch_size
+        # 预筛批次大小（小模型可以处理更多）
+        self.pre_filter_batch_size = 50
+
+        # 预筛模型：如果配置了单独的模型就用它，否则跳过预筛直接全量分类
+        self.pre_filter_model = config.llm.pre_filter_model.strip() if config.llm.pre_filter_model else ""
 
     async def classify_tweets(self, tweets: list[dict]) -> list[dict]:
         """
-        对推文列表进行分类标注
+        对推文列表进行两级分类标注
+
+        流程：
+          1. 第一级（粗筛）：用小模型快速判断是否交易相关
+          2. 第二级（精分类）：只对相关推文做详细分类
 
         Args:
             tweets: 原始推文列表
@@ -78,6 +107,144 @@ class TweetClassifier:
         if not tweets:
             return []
 
+        total = len(tweets)
+
+        # === 第一级：粗筛 ===
+        if self.pre_filter_model:
+            print(f"  第一级粗筛（{self.pre_filter_model}）...")
+            relevant_mask = await self._pre_filter_all(tweets)
+            relevant_tweets = [t for t, is_rel in zip(tweets, relevant_mask) if is_rel]
+            noise_tweets = [t for t, is_rel in zip(tweets, relevant_mask) if not is_rel]
+            print(f"  粗筛结果：{len(relevant_tweets)} 条相关 / {len(noise_tweets)} 条噪音（跳过）")
+        else:
+            # 没有配置预筛模型，全量走精分类
+            relevant_tweets = tweets
+            noise_tweets = []
+            relevant_mask = [True] * total
+
+        # === 第二级：精分类 ===
+        if relevant_tweets:
+            print(f"  第二级精分类（{self.config.llm.model}）...")
+            tagged_relevant = await self._classify_detailed(relevant_tweets)
+        else:
+            tagged_relevant = []
+
+        # === 合并结果 ===
+        # 噪音推文直接标记为noise
+        tagged_noise = []
+        for tweet in noise_tweets:
+            tagged_tweet = tweet.copy()
+            tagged_tweet["category"] = "noise"
+            tagged_tweet["extracted"] = None
+            tagged_noise.append(tagged_tweet)
+
+        # 按原始顺序重组结果
+        result = []
+        rel_idx = 0
+        noise_idx = 0
+        for is_rel in relevant_mask:
+            if is_rel:
+                if rel_idx < len(tagged_relevant):
+                    result.append(tagged_relevant[rel_idx])
+                rel_idx += 1
+            else:
+                if noise_idx < len(tagged_noise):
+                    result.append(tagged_noise[noise_idx])
+                noise_idx += 1
+
+        # 统计
+        categories_count = {}
+        for t in result:
+            cat = t.get("category", "noise")
+            categories_count[cat] = categories_count.get(cat, 0) + 1
+        stats = " / ".join(f"{k}:{v}" for k, v in sorted(categories_count.items()))
+        print(f"  分类完成：{stats}")
+
+        return result
+
+    # === 第一级：粗筛实现 ===
+
+    async def _pre_filter_all(self, tweets: list[dict]) -> list[bool]:
+        """对所有推文进行粗筛，返回每条推文是否相关的布尔列表"""
+        results = [True] * len(tweets)  # 默认为相关（保守策略）
+
+        batches = [
+            tweets[i:i + self.pre_filter_batch_size]
+            for i in range(0, len(tweets), self.pre_filter_batch_size)
+        ]
+
+        for batch_idx, batch in enumerate(batches):
+            offset = batch_idx * self.pre_filter_batch_size
+            batch_results = await self._pre_filter_batch(batch)
+
+            for i, is_relevant in enumerate(batch_results):
+                if offset + i < len(results):
+                    results[offset + i] = is_relevant
+
+            # 批次间间隔
+            if batch_idx < len(batches) - 1:
+                await asyncio.sleep(0.3)
+
+        return results
+
+    async def _pre_filter_batch(self, batch: list[dict]) -> list[bool]:
+        """用小模型粗筛一批推文"""
+
+        # 构建推文文本
+        tweets_text = ""
+        for i, tweet in enumerate(batch):
+            text = tweet["text"].replace("\n", " ").strip()[:200]  # 截断长推文节省token
+            tweets_text += f"[{i}] {text}\n"
+
+        messages = [
+            {"role": "system", "content": PRE_FILTER_SYSTEM_PROMPT},
+            {"role": "user", "content": f"判断以下{len(batch)}条推文是否与加密货币交易/市场相关：\n\n{tweets_text}"},
+        ]
+
+        try:
+            # 使用预筛模型
+            result = await self.llm.chat_with_model(
+                messages,
+                model=self.pre_filter_model,
+                temperature=0.0,
+                max_tokens=512,
+            )
+
+            # 解析结果
+            content = result.strip()
+            if content.startswith("```"):
+                lines = content.split("\n")
+                lines = [l for l in lines if not l.strip().startswith("```")]
+                content = "\n".join(lines)
+
+            parsed = json.loads(content)
+            if isinstance(parsed, list):
+                # 转换为布尔列表
+                bool_results = []
+                for item in parsed:
+                    if isinstance(item, str):
+                        bool_results.append(item.upper().startswith("Y"))
+                    elif isinstance(item, bool):
+                        bool_results.append(item)
+                    else:
+                        bool_results.append(True)  # 无法判断的保留
+
+                # 补齐长度
+                while len(bool_results) < len(batch):
+                    bool_results.append(True)
+
+                return bool_results[:len(batch)]
+
+        except Exception as e:
+            print(f"  ⚠️ 粗筛批次失败: {e}，保守处理（全部标为相关）")
+
+        # 失败时保守策略：全部标为相关
+        return [True] * len(batch)
+
+    # === 第二级：精分类实现 ===
+
+    async def _classify_detailed(self, tweets: list[dict]) -> list[dict]:
+        """对筛选后的推文做详细分类"""
         tagged = []
         total = len(tweets)
         batches = [
@@ -86,7 +253,7 @@ class TweetClassifier:
         ]
 
         for batch_idx, batch in enumerate(batches):
-            print(f"  分类中... ({batch_idx * self.batch_size + len(batch)}/{total})")
+            print(f"    精分类中... ({batch_idx * self.batch_size + len(batch)}/{total})")
 
             results = await self._classify_batch(batch)
 
@@ -107,7 +274,7 @@ class TweetClassifier:
         return tagged
 
     async def _classify_batch(self, batch: list[dict]) -> list[dict]:
-        """分类一个批次的推文"""
+        """精分类一个批次的推文"""
 
         # 构建推文文本列表
         tweets_text = ""

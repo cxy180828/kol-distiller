@@ -25,6 +25,10 @@
             <input type="text" name="llm_model" class="form-input" placeholder="gpt-4o" value="{{ config.llm_model }}">
         </div>
         <div class="form-group">
+            <label>预筛模型 <span class="hint">可选，便宜模型粗筛噪音，节省70%+ Token</span></label>
+            <input type="text" name="llm_pre_filter_model" class="form-input" placeholder="gpt-4o-mini（留空则不启用预筛）" value="{{ config.llm_pre_filter_model }}">
+        </div>
+        <div class="form-group">
             <label>分类温度 <span class="hint">推荐 0.1</span></label>
             <input type="number" name="llm_temperature_classify" class="form-input" step="0.1" min="0" max="2" value="{{ config.llm_temperature_classify }}">
         </div>

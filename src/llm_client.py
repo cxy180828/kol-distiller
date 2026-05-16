@@ -21,6 +21,36 @@ class LLMClient:
             "Authorization": f"Bearer {config.api_key}",
         }
 
+    async def chat_with_model(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: Optional[float] = None,
+        max_tokens: int = 4096,
+        max_retries: int = 3,
+    ) -> str:
+        """
+        使用指定模型发送聊天请求（用于预筛等场景）
+
+        Args:
+            messages: 消息列表
+            model: 指定使用的模型名称
+            temperature: 温度参数
+            max_tokens: 最大输出token数
+            max_retries: 最大重试次数
+
+        Returns:
+            模型回复的文本内容
+        """
+        # 临时替换模型名
+        original_model = self.config.model
+        self.config.model = model
+        try:
+            result = await self.chat(messages, temperature, max_tokens, max_retries)
+        finally:
+            self.config.model = original_model
+        return result
+
     async def chat(
         self,
         messages: list[dict],

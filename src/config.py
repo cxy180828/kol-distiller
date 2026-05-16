@@ -22,6 +22,9 @@ class LLMConfig:
     temperature_classify: float = 0.1
     temperature_distill: float = 0.3
     temperature_discuss: float = 0.7
+    # 预筛模型（便宜的小模型，用于粗筛是否交易相关）
+    # 留空则使用主模型，建议配置为 gpt-4o-mini 等低成本模型
+    pre_filter_model: str = ""
 
 
 @dataclass
