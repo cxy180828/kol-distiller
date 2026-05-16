@@ -31,7 +31,7 @@ def render(request: Request, template_name: str, context: dict = None):
     """兼容新旧版本Starlette的模板渲染"""
     ctx = context or {}
     ctx["request"] = request
-    return templates.TemplateResponse(request, template_name, ctx)
+    return templates.TemplateResponse(template_name, ctx)
 
 from src.config import (
     load_config, ensure_dirs, list_kols, get_kol_dir,
@@ -450,7 +450,7 @@ def require_auth(request: Request):
 # === 页面路由 ===
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, error: str = None):
+def login_page(request: Request, error: str = None):
     if check_auth(request):
         return RedirectResponse("/", status_code=302)
     return render(request, "login.html", {
@@ -459,7 +459,7 @@ async def login_page(request: Request, error: str = None):
 
 
 @app.post("/login")
-async def login_submit(request: Request, password: str = Form(...)):
+def login_submit(request: Request, password: str = Form(...)):
     try:
         correct_password = "admin"
 
@@ -487,13 +487,13 @@ async def login_submit(request: Request, password: str = Form(...)):
 
 
 @app.get("/logout")
-async def logout(request: Request):
+def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
+def dashboard(request: Request):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -532,7 +532,7 @@ async def dashboard(request: Request):
 
 
 @app.get("/kol/{handle}", response_class=HTMLResponse)
-async def kol_detail(request: Request, handle: str):
+def kol_detail(request: Request, handle: str):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -578,7 +578,7 @@ async def kol_detail(request: Request, handle: str):
 
 
 @app.get("/discuss", response_class=HTMLResponse)
-async def discuss_page(request: Request):
+def discuss_page(request: Request):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -591,7 +591,7 @@ async def discuss_page(request: Request):
 
 
 @app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request):
+def history_page(request: Request):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -612,7 +612,7 @@ async def history_page(request: Request):
 
 
 @app.get("/history/{filename}", response_class=HTMLResponse)
-async def history_detail(request: Request, filename: str):
+def history_detail(request: Request, filename: str):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -636,7 +636,7 @@ async def history_detail(request: Request, filename: str):
 
 
 @app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
+def settings_page(request: Request):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
@@ -1170,7 +1170,7 @@ async def api_clear_tips(request: Request):
 # === 推文分类查看 API ===
 
 @app.get("/api/kol/{handle}/tweets")
-async def api_kol_tweets(
+def api_kol_tweets(
     request: Request,
     handle: str,
     category: str = Query(default="all"),
@@ -1384,4 +1384,4 @@ if __name__ == "__main__":
     print(f"   访问: http://{args.host}:{args.port}")
     print(f"   按 Ctrl+C 停止\n")
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run("web:app", host=args.host, port=args.port, log_level="info", workers=2)
