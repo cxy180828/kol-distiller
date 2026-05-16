@@ -221,6 +221,15 @@ class KolQueue:
             except (json.JSONDecodeError, OSError):
                 self.queue = []
 
+    def _reload_from_disk(self):
+        """从磁盘重新加载数据，确保页面刷新时获取最新状态"""
+        saved_running = self.running
+        saved_task = self._task
+        self._load()
+        # 保持运行时状态（task和running标志以内存为准）
+        self.running = saved_running
+        self._task = saved_task
+
     def _save(self):
         try:
             data = {
@@ -230,8 +239,9 @@ class KolQueue:
             }
             with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+        except OSError as e:
+            import traceback
+            traceback.print_exc()
 
     def add(self, handle: str) -> dict | None:
         """添加KOL到队列"""
@@ -273,6 +283,8 @@ class KolQueue:
         return False
 
     def get_queue(self) -> list[dict]:
+        """获取队列（每次从磁盘同步最新状态）"""
+        self._reload_from_disk()
         return self.queue
 
     def get_pending(self) -> list[dict]:
@@ -308,55 +320,79 @@ class KolQueue:
         if self.running and (self._task is None or self._task.done()):
             self._task = asyncio.create_task(self._process_loop())
 
+    @property
+    def is_task_alive(self) -> bool:
+        """检查后台任务是否真的在运行"""
+        return self._task is not None and not self._task.done()
+
     async def _process_loop(self):
-        """后台循环：逐个处理队列中的KOL"""
-        while self.running:
-            pending = self.get_pending()
-            if not pending:
-                # 没有待处理的，等待后再检查
-                await asyncio.sleep(30)
-                continue
+        """后台循环：逐个处理队列中的KOL（带顶层异常保护）"""
+        try:
+            while self.running:
+                pending = self.get_pending()
+                if not pending:
+                    # 没有待处理的，等待后再检查
+                    await asyncio.sleep(30)
+                    continue
 
-            item = pending[0]
-            handle = item["handle"]
-            item["status"] = "processing"
-            item["started_at"] = datetime.now(UTC8).isoformat()
-            item["error"] = None
-            self._save()
-
-            try:
-                await self._process_one(handle)
-                item["status"] = "completed"
-                item["completed_at"] = datetime.now(UTC8).isoformat()
+                item = pending[0]
+                handle = item["handle"]
+                item["status"] = "processing"
+                item["started_at"] = datetime.now(UTC8).isoformat()
+                item["error"] = None
                 self._save()
-                tips_manager.add_tip(handle, f"队列自动添加成功")
-            except Exception as e:
-                error_str = str(e)
-                is_rate_limit = "429" in error_str or "限流" in error_str or "rate" in error_str.lower()
 
-                if is_rate_limit and item["retries"] < self.max_retries:
-                    # 限流：标记为pending等待重试
-                    item["status"] = "pending"
-                    item["retries"] += 1
-                    item["error"] = f"限流，第{item['retries']}次重试等待中"
-                    self._save()
-                    tips_manager.add_tip(handle, f"触发限流（429），将在{self.retry_delay_seconds // 60}分钟后自动重试（第{item['retries']}/{self.max_retries}次）")
-                    # 限流等待更长时间
-                    await asyncio.sleep(self.retry_delay_seconds)
-                    continue  # 不等 interval，直接重试
-                else:
-                    item["status"] = "failed"
-                    item["error"] = error_str[:200]
+                try:
+                    await self._process_one(handle)
+                    item["status"] = "completed"
                     item["completed_at"] = datetime.now(UTC8).isoformat()
                     self._save()
-                    if is_rate_limit:
-                        tips_manager.add_tip(handle, f"限流重试{self.max_retries}次仍失败，已放弃。建议增大队列间隔。")
-                    else:
-                        tips_manager.add_tip(handle, error_str[:150])
+                    tips_manager.add_tip(handle, f"队列自动添加成功")
+                except Exception as e:
+                    error_str = str(e)
+                    is_rate_limit = "429" in error_str or "限流" in error_str or "rate" in error_str.lower()
 
-            # 正常间隔等待
+                    if is_rate_limit and item["retries"] < self.max_retries:
+                        # 限流：标记为pending等待重试
+                        item["status"] = "pending"
+                        item["retries"] += 1
+                        item["error"] = f"限流，第{item['retries']}次重试等待中"
+                        self._save()
+                        tips_manager.add_tip(handle, f"触发限流（429），将在{self.retry_delay_seconds // 60}分钟后自动重试（第{item['retries']}/{self.max_retries}次）")
+                        # 限流等待更长时间
+                        await asyncio.sleep(self.retry_delay_seconds)
+                        continue  # 不等 interval，直接重试
+                    else:
+                        item["status"] = "failed"
+                        item["error"] = error_str[:200]
+                        item["completed_at"] = datetime.now(UTC8).isoformat()
+                        self._save()
+                        if is_rate_limit:
+                            tips_manager.add_tip(handle, f"限流重试{self.max_retries}次仍失败，已放弃。建议增大队列间隔。")
+                        else:
+                            tips_manager.add_tip(handle, error_str[:150])
+
+                # 正常间隔等待
+                if self.running:
+                    await asyncio.sleep(self.interval_seconds)
+        except asyncio.CancelledError:
+            # 正常取消（app关闭时）
+            pass
+        except BaseException as e:
+            # 捕获所有异常，防止后台任务静默死亡
+            import traceback
+            traceback.print_exc()
+            # 标记当前处理中的为失败
+            for item in self.queue:
+                if item["status"] == "processing":
+                    item["status"] = "failed"
+                    item["error"] = f"队列任务异常终止: {str(e)[:100]}"
+                    item["completed_at"] = datetime.now(UTC8).isoformat()
+            self._save()
+            # 尝试自动重启（3秒后）
             if self.running:
-                await asyncio.sleep(self.interval_seconds)
+                await asyncio.sleep(3)
+                self._task = asyncio.create_task(self._process_loop())
 
     async def _process_one(self, handle: str):
         """处理单个KOL：抓取+分类+蒸馏（使用多账号池轮换）"""
@@ -497,6 +533,10 @@ def dashboard(request: Request):
     if not check_auth(request):
         return RedirectResponse("/login", status_code=302)
 
+    # 自动恢复：如果队列标记为running但后台任务已死，尝试重启
+    if kol_queue.running and not kol_queue.is_task_alive:
+        kol_queue.ensure_running()
+
     kols = list_kols()
     kol_data = []
     for handle in kols:
@@ -523,9 +563,9 @@ def dashboard(request: Request):
         "notifications": notifications,
         "tips": tips,
         "kol_count": len(kols),
-        "queue_running": kol_queue.running,
+        "queue_running": kol_queue.running and kol_queue.is_task_alive,
         "queue_pending": len(kol_queue.get_pending()),
-        "queue_items": kol_queue.get_queue()[:10],
+        "queue_items": kol_queue.get_queue()[-30:],  # 显示最近30条
         "queue_interval": kol_queue.interval_seconds,
         "account_count": account_pool.count,
     })
@@ -1222,9 +1262,12 @@ def api_kol_tweets(
 async def api_get_queue(request: Request):
     if not check_auth(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
+    # 如果标记为running但task已死，尝试自动恢复
+    if kol_queue.running and not kol_queue.is_task_alive:
+        kol_queue.ensure_running()
     return JSONResponse({
         "queue": kol_queue.get_queue(),
-        "running": kol_queue.running,
+        "running": kol_queue.running and kol_queue.is_task_alive,
         "interval_seconds": kol_queue.interval_seconds,
         "pending_count": len(kol_queue.get_pending()),
     })

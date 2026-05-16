@@ -72,7 +72,7 @@
 <!-- 队列管理 -->
 <div class="card" style="margin-bottom:16px;">
     <div class="card-header" style="display:flex; align-items:center; justify-content:space-between;">
-        <h2>KOL 队列 <span class="badge {{ 'badge-success' if queue_running else 'badge-warning' }}">{{ '运行中' if queue_running else '已停止' }}</span></h2>
+        <h2>KOL 队列 <span id="queueStatusBadge" class="badge {{ 'badge-success' if queue_running else 'badge-warning' }}">{{ '运行中' if queue_running else '已停止' }}</span> <span id="queuePendingInfo" style="font-size:12px; color:var(--text-dim); font-weight:normal;">待处理 {{ queue_pending }} 个</span></h2>
         <div style="display:flex; gap:8px; align-items:center;">
             <span style="font-size:11px; color:var(--text-dim);">间隔 {{ queue_interval // 60 }}分钟 · {{ account_count }} 个小号</span>
             <button class="btn btn-outline btn-sm" onclick="showQueueModal()">+ 批量添加</button>
@@ -84,7 +84,7 @@
         </div>
     </div>
     {% if queue_items %}
-    <div style="max-height:250px; overflow-y:auto;">
+    <div style="max-height:400px; overflow-y:auto;" id="queueItemsList">
         {% for item in queue_items %}
         <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); font-size:13px;">
             <span style="font-weight:600;">@{{ item.handle }}</span>
@@ -103,6 +103,9 @@
             {% if item.error %}
             <span style="font-size:11px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ item.error }}">{{ item.error[:50] }}</span>
             {% endif %}
+            {% if item.completed_at %}
+            <span style="font-size:11px; color:var(--text-dim);">{{ item.completed_at[:16] }}</span>
+            {% endif %}
             <span style="margin-left:auto;"></span>
             {% if item.status in ['pending', 'failed'] %}
             <button class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:11px;" onclick="queueRemove('{{ item.handle }}')">移除</button>
@@ -116,7 +119,8 @@
         <button class="btn btn-outline btn-sm" onclick="showAccountModal()">管理小号</button>
     </div>
     {% else %}
-    <p style="color:var(--text-dim); text-align:center; padding:20px;">
+    <div id="queueItemsList"></div>
+    <p id="queueEmptyMsg" style="color:var(--text-dim); text-align:center; padding:20px;">
         队列为空，点击「批量添加」放入KOL<br>
         <span style="font-size:12px;">队列会自动按间隔逐个处理，遇限流自动等待重试</span>
     </p>
@@ -447,5 +451,93 @@ async function removeAccount(index) {
     showToast(resp.message || '已移除', 'success');
     loadAccounts();
 }
+
+// === 队列状态自动刷新 ===
+let _queuePollTimer = null;
+
+function startQueuePolling() {
+    // 每10秒轮询队列状态，实时更新界面
+    if (_queuePollTimer) return;
+    _queuePollTimer = setInterval(refreshQueueStatus, 10000);
+}
+
+function stopQueuePolling() {
+    if (_queuePollTimer) {
+        clearInterval(_queuePollTimer);
+        _queuePollTimer = null;
+    }
+}
+
+async function refreshQueueStatus() {
+    try {
+        const resp = await fetch('/api/queue');
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        // 更新运行状态badge
+        const statusBadge = document.getElementById('queueStatusBadge');
+        if (statusBadge) {
+            if (data.running) {
+                statusBadge.className = 'badge badge-success';
+                statusBadge.textContent = '运行中';
+            } else {
+                statusBadge.className = 'badge badge-warning';
+                statusBadge.textContent = '已停止';
+            }
+        }
+
+        // 更新队列列表
+        const listEl = document.getElementById('queueItemsList');
+        const emptyMsg = document.getElementById('queueEmptyMsg');
+        if (listEl && data.queue && data.queue.length > 0) {
+            if (emptyMsg) emptyMsg.style.display = 'none';
+            // 只显示最近30条
+            const items = data.queue.slice(-30);
+            let html = '';
+            items.forEach(item => {
+                let badgeClass = 'badge-warning';
+                let badgeText = '等待中';
+                if (item.status === 'processing') { badgeClass = 'badge-info'; badgeText = '处理中'; }
+                else if (item.status === 'completed') { badgeClass = 'badge-success'; badgeText = '完成'; }
+                else if (item.status === 'failed') { badgeClass = 'badge-danger'; badgeText = '失败'; }
+
+                let retryHtml = item.retries > 0 ? `<span style="font-size:11px; color:var(--orange);">重试${item.retries}次</span>` : '';
+                let errorHtml = item.error ? `<span style="font-size:11px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${item.error}">${item.error.substring(0, 50)}</span>` : '';
+                let timeHtml = item.completed_at ? `<span style="font-size:11px; color:var(--text-dim);">${item.completed_at.substring(0, 16)}</span>` : '';
+                let removeBtn = (item.status === 'pending' || item.status === 'failed') ? `<button class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:11px;" onclick="queueRemove('${item.handle}')">移除</button>` : '';
+
+                html += `<div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); font-size:13px;">
+                    <span style="font-weight:600;">@${item.handle}</span>
+                    <span class="badge ${badgeClass}">${badgeText}</span>
+                    ${retryHtml}${errorHtml}${timeHtml}
+                    <span style="margin-left:auto;"></span>
+                    ${removeBtn}
+                </div>`;
+            });
+            listEl.innerHTML = html;
+        }
+
+        // 更新待处理数量
+        const pendingInfo = document.getElementById('queuePendingInfo');
+        if (pendingInfo) {
+            pendingInfo.textContent = `待处理 ${data.pending_count} 个`;
+        }
+    } catch(e) {
+        // 网络错误忽略，下次再试
+    }
+}
+
+// 页面加载后自动开始轮询
+startQueuePolling();
+
+// 页面不可见时暂停轮询，可见时恢复
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopQueuePolling();
+    } else {
+        refreshQueueStatus(); // 立即刷新一次
+        startQueuePolling();
+    }
+});
 </script>
 {% endblock %}
