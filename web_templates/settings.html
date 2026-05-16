@@ -42,56 +42,64 @@
 <!-- Twitter 配置 -->
 <div class="card">
     <div class="card-header">
-        <h2>🐦 Twitter / X</h2>
+        <h2>🐦 Twitter / X 凭证</h2>
         <span id="twitterStatus" class="badge badge-warning">检查中...</span>
     </div>
 
-    <!-- 登录状态显示 -->
+    <!-- 凭证状态显示 -->
     <div id="twitterLoggedIn" style="display:none; margin-bottom:16px;">
         <div class="notification notification-success">
-            ✅ 已登录 · cookies.json生成于 <span id="loginTime"></span>
+            ✅ 凭证有效 · 账号 <span id="tw_screen_name"></span> · 保存于 <span id="tw_saved_at"></span>
+            <button type="button" class="btn btn-outline btn-sm" style="margin-left:12px;" onclick="verifyTwitter()">重新验证</button>
         </div>
     </div>
     <div id="twitterNotLoggedIn" style="display:none; margin-bottom:16px;">
         <div class="notification notification-error">
-            ❌ 未登录Twitter · 需要登录后才能抓取KOL推文
+            ❌ 未配置Twitter凭证 · 需要 auth_token 和 ct0 才能抓取KOL推文
         </div>
     </div>
 
-    <!-- 登录表单 -->
+    <!-- 获取方式说明 -->
+    <div style="margin-bottom:16px; padding:12px; background:var(--bg-input); border-radius:var(--radius); font-size:13px;">
+        <p style="font-weight:500; margin-bottom:8px;">📋 获取方式（免费，无需API Key）：</p>
+        <ol style="margin:0; padding-left:20px; line-height:1.8; color:var(--text-dim);">
+            <li>用浏览器（推荐Chrome）登录 <a href="https://x.com" target="_blank" style="color:var(--blue);">x.com</a>（建议使用小号）</li>
+            <li>按 <kbd style="background:var(--bg-card); padding:2px 6px; border-radius:4px; font-size:12px;">F12</kbd> 打开开发者工具</li>
+            <li>切换到 <strong>Application</strong>（应用）标签页</li>
+            <li>左侧展开 <strong>Cookies</strong> → 点击 <strong>https://x.com</strong></li>
+            <li>找到并复制 <code>auth_token</code> 和 <code>ct0</code> 的值粘贴到下方</li>
+        </ol>
+    </div>
+
+    <!-- auth_token 和 ct0 输入 -->
     <div style="margin-bottom:16px; padding:16px; background:var(--bg-input); border-radius:var(--radius);">
-        <p style="font-size:13px; font-weight:500; margin-bottom:12px;">登录Twitter小号（支持2FA）</p>
         <div class="settings-grid">
-            <div class="form-group" style="margin-bottom:8px;">
-                <label>用户名</label>
-                <input type="text" id="tw_username" class="form-input" placeholder="your_username" value="{{ config.twitter_username }}">
+            <div class="form-group" style="margin-bottom:12px;">
+                <label>auth_token <span class="badge badge-warning">敏感</span></label>
+                <div class="secret-input">
+                    <input type="password" id="tw_auth_token" class="form-input" placeholder="粘贴 auth_token 值（约40位十六进制字符串）">
+                    <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+                </div>
             </div>
-            <div class="form-group" style="margin-bottom:8px;">
-                <label>密码</label>
-                <input type="password" id="tw_password" class="form-input" placeholder="密码">
-            </div>
-            <div class="form-group" style="margin-bottom:8px;">
-                <label>邮箱 <span class="hint">可选，部分账号需要</span></label>
-                <input type="text" id="tw_email" class="form-input" placeholder="email@example.com" value="{{ config.twitter_email }}">
+            <div class="form-group" style="margin-bottom:12px;">
+                <label>ct0 <span class="badge badge-warning">敏感</span></label>
+                <div class="secret-input">
+                    <input type="password" id="tw_ct0" class="form-input" placeholder="粘贴 ct0 值（约160位字符串）">
+                    <button type="button" class="btn btn-outline btn-sm toggle-secret" onclick="toggleSecret(this)">显示</button>
+                </div>
             </div>
         </div>
-        <button type="button" class="btn btn-primary" onclick="twitterLogin()" id="btnTwitterLogin">🔑 登录Twitter</button>
-    </div>
-
-    <!-- 2FA验证码弹窗 -->
-    <div id="tfa_box" style="display:none; margin-bottom:16px; padding:16px; background:var(--bg-input); border:1px solid var(--orange); border-radius:var(--radius);">
-        <p style="font-size:13px; font-weight:500; margin-bottom:8px;">⚠️ 需要2FA验证码</p>
-        <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">请打开你的验证器App，输入6位验证码：</p>
-        <div style="display:flex; gap:8px;">
-            <input type="text" id="tw_2fa_code" class="form-input" placeholder="000000" maxlength="6" style="width:140px; font-size:18px; text-align:center; letter-spacing:4px;">
-            <button type="button" class="btn btn-primary" onclick="twitter2FA()">✅ 验证</button>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <button type="button" class="btn btn-primary" onclick="saveTwitterCredentials()" id="btnSaveTwitter">🔑 验证并保存</button>
+            <span id="tw_save_hint" style="font-size:12px; color:var(--text-dim);">
+                保存时会自动验证凭证是否有效
+            </span>
         </div>
     </div>
 
-    <!-- 隐藏字段保存到config（供保存配置用） -->
-    <input type="hidden" name="twitter_username" value="{{ config.twitter_username }}">
-    <input type="hidden" name="twitter_password" value="{{ config.twitter_password }}">
-    <input type="hidden" name="twitter_email" value="{{ config.twitter_email }}">
+    <div style="font-size:12px; color:var(--text-dim); padding:8px 0;">
+        💡 提示：auth_token 和 ct0 有时效性（通常几周到几个月），过期后需要重新获取。凭证单独保存，不影响其他配置。
+    </div>
 </div>
 
 <!-- 行情数据 -->
@@ -199,11 +207,6 @@ function toggleSecret(btn) {
 
 async function saveSettings(e) {
     e.preventDefault();
-    // 同步隐藏字段
-    document.querySelector('input[name="twitter_username"]').value = document.getElementById('tw_username').value;
-    document.querySelector('input[name="twitter_password"]').value = document.getElementById('tw_password').value;
-    document.querySelector('input[name="twitter_email"]').value = document.getElementById('tw_email').value;
-
     const form = new FormData(e.target);
     const resp = await apiPost('/api/settings/save', form);
     if (resp.error) {
@@ -213,65 +216,56 @@ async function saveSettings(e) {
     }
 }
 
-// Twitter登录
-async function twitterLogin() {
-    const username = document.getElementById('tw_username').value.trim();
-    const password = document.getElementById('tw_password').value.trim();
-    const email = document.getElementById('tw_email').value.trim();
+// Twitter凭证保存
+async function saveTwitterCredentials() {
+    const authToken = document.getElementById('tw_auth_token').value.trim();
+    const ct0 = document.getElementById('tw_ct0').value.trim();
 
-    if (!username || !password) {
-        showToast('请填写用户名和密码', 'error');
+    if (!authToken || !ct0) {
+        showToast('请填写 auth_token 和 ct0', 'error');
         return;
     }
 
-    const btn = document.getElementById('btnTwitterLogin');
+    const btn = document.getElementById('btnSaveTwitter');
+    const hint = document.getElementById('tw_save_hint');
     btn.disabled = true;
-    btn.textContent = '⏳ 登录中...';
+    btn.textContent = '⏳ 验证中...';
+    hint.textContent = '正在连接Twitter验证凭证...';
 
     const form = new FormData();
-    form.append('username', username);
-    form.append('password', password);
-    form.append('email', email);
+    form.append('auth_token', authToken);
+    form.append('ct0', ct0);
 
-    const resp = await apiPost('/api/twitter/login', form);
+    const resp = await apiPost('/api/twitter/save_credentials', form);
     btn.disabled = false;
-    btn.textContent = '🔑 登录Twitter';
+    btn.textContent = '🔑 验证并保存';
+    hint.textContent = '保存时会自动验证凭证是否有效';
 
     if (resp.status === 'success') {
         showToast(resp.message, 'success');
+        // 清空输入框（凭证已安全保存到服务端）
+        document.getElementById('tw_auth_token').value = '';
+        document.getElementById('tw_ct0').value = '';
         checkTwitterStatus();
-    } else if (resp.status === 'need_2fa') {
-        document.getElementById('tfa_box').style.display = 'block';
-        document.getElementById('tw_2fa_code').focus();
-        showToast('请输入2FA验证码', 'running');
     } else {
-        showToast(resp.error || '登录失败', 'error');
+        showToast(resp.error || '保存失败', 'error');
     }
 }
 
-// 2FA验证
-async function twitter2FA() {
-    const code = document.getElementById('tw_2fa_code').value.trim();
-    if (!code) {
-        showToast('请输入验证码', 'error');
-        return;
-    }
+// 重新验证已保存的凭证
+async function verifyTwitter() {
+    const resp = await fetch('/api/twitter/verify', {method: 'POST'});
+    const data = await resp.json();
 
-    const form = new FormData();
-    form.append('code', code);
-
-    const resp = await apiPost('/api/twitter/verify_2fa', form);
-
-    if (resp.status === 'success') {
-        document.getElementById('tfa_box').style.display = 'none';
-        showToast(resp.message, 'success');
-        checkTwitterStatus();
+    if (data.status === 'valid') {
+        showToast(data.message, 'success');
     } else {
-        showToast(resp.error || '验证失败', 'error');
+        showToast('凭证已失效: ' + (data.message || '请重新填写'), 'error');
+        checkTwitterStatus();
     }
 }
 
-// 检查Twitter登录状态
+// 检查Twitter凭证状态
 async function checkTwitterStatus() {
     const resp = await fetch('/api/twitter/status');
     const data = await resp.json();
@@ -280,13 +274,14 @@ async function checkTwitterStatus() {
     const notLoggedIn = document.getElementById('twitterNotLoggedIn');
 
     if (data.logged_in) {
-        badge.textContent = '已登录';
+        badge.textContent = '已配置';
         badge.className = 'badge badge-success';
         loggedIn.style.display = 'block';
         notLoggedIn.style.display = 'none';
-        document.getElementById('loginTime').textContent = data.login_time;
+        document.getElementById('tw_screen_name').textContent = '@' + (data.screen_name || '未知');
+        document.getElementById('tw_saved_at').textContent = data.saved_at || '未知时间';
     } else {
-        badge.textContent = '未登录';
+        badge.textContent = '未配置';
         badge.className = 'badge badge-danger';
         loggedIn.style.display = 'none';
         notLoggedIn.style.display = 'block';

@@ -12,10 +12,7 @@ import json
 import asyncio
 import hashlib
 import secrets
-from datetime import datetime, timezone, timedelta
-
-# 北京时间 UTC+8
-CN_TZ = timezone(timedelta(hours=8))
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -37,7 +34,7 @@ from src.config import (
     load_config, ensure_dirs, list_kols, get_kol_dir,
     AppConfig, ROOT_DIR, DISCUSSIONS_DIR,
 )
-from src.scraper import TweetScraper, save_tweets
+from src.scraper import TweetScraper, save_tweets, verify_credentials
 from src.classifier import (
     TweetClassifier, save_tagged_tweets,
     load_tagged_tweets, count_recent_trade_tweets,
@@ -85,7 +82,7 @@ class TaskManager:
             "progress": "",
             "result": None,
             "error": None,
-            "created_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
         }
         return task_id
@@ -98,13 +95,13 @@ class TaskManager:
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "completed"
             self.tasks[task_id]["result"] = result
-            self.tasks[task_id]["completed_at"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def fail_task(self, task_id: str, error: str):
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "failed"
             self.tasks[task_id]["error"] = error
-            self.tasks[task_id]["completed_at"] = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def get_task(self, task_id: str) -> Optional[dict]:
         return self.tasks.get(task_id)
@@ -391,9 +388,6 @@ async def settings_page(request: Request):
             "llm_temperature_classify": llm.get("temperature_classify", 0.1),
             "llm_temperature_distill": llm.get("temperature_distill", 0.3),
             "llm_temperature_discuss": llm.get("temperature_discuss", 0.7),
-            "twitter_username": twitter.get("username", ""),
-            "twitter_password": twitter.get("password", ""),
-            "twitter_email": twitter.get("email", ""),
             "market_data_source": market.get("source", "binance"),
             "market_data_base_url": market.get("base_url", "https://api.binance.com"),
             "schedule_fetch_interval_hours": schedule.get("fetch_interval_hours", 6),
@@ -613,113 +607,117 @@ async def api_notifications(request: Request):
     return JSONResponse(task_manager.get_recent_tasks(10))
 
 
-# Twitter登录状态管理
-_twitter_login_state = {"client": None, "status": "idle", "error": None}
+# Twitter凭证管理
 
-
-@app.post("/api/twitter/login")
-async def api_twitter_login(request: Request):
-    """第一步：发起Twitter登录（输入用户名密码）"""
+@app.post("/api/twitter/save_credentials")
+async def api_twitter_save_credentials(request: Request):
+    """保存 Twitter auth_token 和 ct0 到凭证文件"""
     if not check_auth(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
 
     form = await request.form()
-    username = form.get("username", "").strip()
-    password = form.get("password", "").strip()
-    email = form.get("email", "").strip()
+    auth_token = form.get("auth_token", "").strip()
+    ct0 = form.get("ct0", "").strip()
 
-    if not username or not password:
-        return JSONResponse({"error": "用户名和密码不能为空"}, status_code=400)
+    if not auth_token or not ct0:
+        return JSONResponse({"error": "auth_token 和 ct0 都不能为空"}, status_code=400)
 
-    from twikit import Client
+    # 基本格式校验
+    if len(auth_token) < 20:
+        return JSONResponse({"error": "auth_token 格式不正确（长度过短）"}, status_code=400)
+    if len(ct0) < 20:
+        return JSONResponse({"error": "ct0 格式不正确（长度过短）"}, status_code=400)
 
-    try:
-        client = Client("zh-CN")
-        cookies_path = str(ROOT_DIR / "cookies.json")
+    # 验证凭证是否有效
+    result = await verify_credentials(auth_token, ct0)
 
-        # 尝试登录，可能需要2FA
-        try:
-            await client.login(
-                auth_info_1=username,
-                auth_info_2=email,
-                password=password,
-                cookies_file=cookies_path,
-            )
-            # 登录成功，不需要2FA
-            _twitter_login_state["client"] = None
-            _twitter_login_state["status"] = "idle"
-            return JSONResponse({"status": "success", "message": "✅ 登录成功，cookies.json 已生成"})
-        except Exception as e:
-            error_msg = str(e).lower()
-            # 检测是否需要2FA
-            if "confirmation" in error_msg or "challenge" in error_msg or "2fa" in error_msg or "totp" in error_msg or "verification" in error_msg:
-                _twitter_login_state["client"] = client
-                _twitter_login_state["status"] = "need_2fa"
-                return JSONResponse({"status": "need_2fa", "message": "请输入2FA验证码"})
-            elif "key_byte" in error_msg:
-                return JSONResponse({
-                    "error": (
-                        "Twitter登录验证失败（KEY_BYTE错误）。\n"
-                        "Twitter更新了前端加密，用户名密码登录暂时不可用。\n"
-                        "请先在VPS执行: pip install --upgrade twikit\n"
-                        "如仍报错，请用浏览器Cookie方式：在config.yaml中填写auth_token和ct0"
-                    )
-                }, status_code=400)
-            else:
-                return JSONResponse({"error": f"登录失败: {e}"}, status_code=400)
-    except Exception as e:
-        return JSONResponse({"error": f"初始化失败: {e}"}, status_code=500)
+    if not result["valid"]:
+        return JSONResponse({
+            "error": f"凭证验证失败: {result['message']}\n请确认从浏览器复制的值是否正确。"
+        }, status_code=400)
 
-
-@app.post("/api/twitter/verify_2fa")
-async def api_twitter_verify_2fa(request: Request):
-    """第二步：输入2FA验证码完成登录"""
-    if not check_auth(request):
-        return JSONResponse({"error": "未登录"}, status_code=401)
-
-    form = await request.form()
-    code = form.get("code", "").strip()
-
-    if not code:
-        return JSONResponse({"error": "验证码不能为空"}, status_code=400)
-
-    client = _twitter_login_state.get("client")
-    if client is None or _twitter_login_state["status"] != "need_2fa":
-        return JSONResponse({"error": "请先发起登录"}, status_code=400)
+    # 验证通过，保存到文件
+    creds_path = ROOT_DIR / "twitter_credentials.json"
+    creds_data = {
+        "auth_token": auth_token,
+        "ct0": ct0,
+        "screen_name": result.get("screen_name", ""),
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     try:
-        cookies_path = str(ROOT_DIR / "cookies.json")
-        # twikit的2FA验证
-        await client.totp_login(code, cookies_file=cookies_path)
-        _twitter_login_state["client"] = None
-        _twitter_login_state["status"] = "idle"
-        return JSONResponse({"status": "success", "message": "✅ 2FA验证成功，cookies.json 已生成"})
+        with open(creds_path, "w", encoding="utf-8") as f:
+            json.dump(creds_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        _twitter_login_state["client"] = None
-        _twitter_login_state["status"] = "idle"
-        return JSONResponse({"error": f"2FA验证失败: {e}"}, status_code=400)
+        return JSONResponse({"error": f"保存凭证失败: {e}"}, status_code=500)
+
+    return JSONResponse({
+        "status": "success",
+        "message": f"保存成功，当前登录账号: @{result.get('screen_name', '未知')}",
+        "screen_name": result.get("screen_name", ""),
+    })
 
 
 @app.get("/api/twitter/status")
 async def api_twitter_status(request: Request):
-    """检查Twitter登录状态"""
+    """检查Twitter凭证状态"""
     if not check_auth(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
 
-    cookies_path = ROOT_DIR / "cookies.json"
-    if cookies_path.exists():
-        import os
-        mtime = os.path.getmtime(cookies_path)
-        login_time = datetime.fromtimestamp(mtime, tz=CN_TZ).strftime("%Y-%m-%d %H:%M")
+    creds_path = ROOT_DIR / "twitter_credentials.json"
+    if creds_path.exists():
+        try:
+            with open(creds_path, "r", encoding="utf-8") as f:
+                creds = json.load(f)
+            screen_name = creds.get("screen_name", "未知")
+            saved_at = creds.get("saved_at", "")[:16]
+            return JSONResponse({
+                "logged_in": True,
+                "screen_name": screen_name,
+                "saved_at": saved_at,
+            })
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return JSONResponse({
+        "logged_in": False,
+        "message": "未配置Twitter凭证，请填写 auth_token 和 ct0",
+    })
+
+
+@app.post("/api/twitter/verify")
+async def api_twitter_verify(request: Request):
+    """验证当前保存的Twitter凭证是否仍然有效"""
+    if not check_auth(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    creds_path = ROOT_DIR / "twitter_credentials.json"
+    if not creds_path.exists():
+        return JSONResponse({"error": "未保存凭证，请先填写 auth_token 和 ct0"}, status_code=400)
+
+    try:
+        with open(creds_path, "r", encoding="utf-8") as f:
+            creds = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return JSONResponse({"error": f"读取凭证文件失败: {e}"}, status_code=500)
+
+    auth_token = creds.get("auth_token", "")
+    ct0 = creds.get("ct0", "")
+
+    if not auth_token or not ct0:
+        return JSONResponse({"error": "凭证内容为空，请重新填写"}, status_code=400)
+
+    result = await verify_credentials(auth_token, ct0)
+
+    if result["valid"]:
         return JSONResponse({
-            "logged_in": True,
-            "login_time": login_time,
-            "cookies_file": str(cookies_path),
+            "status": "valid",
+            "message": result["message"],
         })
     else:
         return JSONResponse({
-            "logged_in": False,
-            "message": "未登录Twitter，请先登录",
+            "status": "invalid",
+            "message": result["message"],
         })
 
 
@@ -757,9 +755,8 @@ async def api_save_settings(request: Request):
                 "temperature_discuss": safe_float(form.get("llm_temperature_discuss"), 0.7, "讨论温度"),
             },
             "twitter": {
-                "username": form.get("twitter_username", ""),
-                "password": form.get("twitter_password", ""),
-                "email": form.get("twitter_email", ""),
+                "auth_token": "",
+                "ct0": "",
             },
             "market_data": {
                 "source": form.get("market_data_source", "binance"),
